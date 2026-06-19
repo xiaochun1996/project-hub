@@ -39,3 +39,53 @@ export async function scanDirectory(path: string): Promise<string[]> {
 export async function importProjects(paths: string[]): Promise<Project[]> {
   return await invoke<Project[]>("import_projects", { paths });
 }
+
+export interface ProjectBatchStatus {
+  id: string;
+  status: import("./git").ProjectStatus;
+}
+
+export interface BatchPullResult {
+  updated: string[];
+  skipped: string[];
+  failed: [string, string][];
+}
+
+export interface BatchPushResult {
+  pushed: string[];
+  skipped: string[];
+  failed: [string, string][];
+}
+
+export async function batchRefresh(): Promise<ProjectBatchStatus[]> {
+  return await invoke<ProjectBatchStatus[]>("batch_refresh");
+}
+
+export async function batchPull(): Promise<BatchPullResult> {
+  return await invoke<BatchPullResult>("batch_pull");
+}
+
+export async function batchPush(): Promise<BatchPushResult> {
+  return await invoke<BatchPushResult>("batch_push");
+}
+
+export async function pullProject(path: string): Promise<string> {
+  return await invoke<string>("pull_project", { path });
+}
+
+export async function pushProject(path: string): Promise<string> {
+  return await invoke<string>("push_project", { path });
+}
+
+export async function openInFinder(path: string): Promise<void> {
+  return await invoke<void>("open_in_finder", { path });
+}
+
+export interface GitHubRepoInfo {
+  url: string | null;
+  owner_repo: string | null;
+}
+
+export async function getGitHubRepoUrl(path: string): Promise<GitHubRepoInfo> {
+  return await invoke<GitHubRepoInfo>("get_github_repo_url", { path });
+}

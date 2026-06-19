@@ -1,15 +1,5 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { load as loadStore } from "@tauri-apps/plugin-store";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -17,184 +7,311 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/toaster";
 import { toast } from "@/hooks/use-toast";
-import ProjectRegistry from "@/pages/projects";
+import ProjectCard from "@/components/ProjectCard";
+import AddProjectDialog from "@/components/AddProjectDialog";
+import {
+  batchPull,
+  batchPush,
+  batchRefresh,
+  Project,
+} from "@/lib/projects";
+import { getProjectStatus, ProjectStatus } from "@/lib/git";
+import { getOpenIssuesCount, OpenIssuesResult } from "@/lib/gh";
 
-interface Settings {
-  theme: string;
-  launch_count: number;
-}
-
-function App() {
-  const [theme, setTheme] = useState<string>("light");
-  const [launchCount, setLaunchCount] = useState<number>(0);
-  const [jsValue, setJsValue] = useState<string>("");
+function ProjectListHome() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [statusMap, setStatusMap] = useState<Record<string, ProjectStatus | null>>({});
+  const [issuesMap, setIssuesMap] = useState<Record<string, OpenIssuesResult | null>>({});
   const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pullingAll, setPullingAll] = useState(false);
+  const [pushingAll, setPushingAll] = useState(false);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [addDialogMode, setAddDialogMode] = useState<"manual" | "scan">("manual");
+  const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const settings: Settings = await invoke("get_settings");
-        if (cancelled) return;
-        setTheme(settings.theme);
-        setLaunchCount(settings.launch_count);
-
-        const store = await loadStore("frontend.json");
-        const v: string | null = (await store.get("welcome")) as string | null;
-        if (cancelled) return;
-        setJsValue(v ?? "");
-        setLoaded(true);
-      } catch (e) {
-        console.warn("Tauri invoke or store failed (running in browser?):", e);
-        setLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const refreshEach = useCallback(async (list: Project[]) => {
+    const results: { id: string; status: ProjectStatus | null; issues: OpenIssuesResult | null }[] = [];
+    await Promise.all(
+      list.map(async (p) => {
+        const [status, issues] = await Promise.allSettled([
+          getProjectStatus(p.path, p.base_branch ?? undefined),
+          getOpenIssuesCount(p.path),
+        ]);
+        const s =
+          status.status === "fulfilled" ? status.value : null;
+        const i =
+          issues.status === "fulfilled"
+            ? issues.value
+            : { status: "error" as const, error: { code: "CommandFailed" as const, message: String(issues.status === "rejected" ? issues.reason : "unknown") } };
+        results.push({ id: p.id, status: s, issues: i });
+      })
+    );
+    const newStatusMap: Record<string, ProjectStatus | null> = {};
+    const newIssuesMap: Record<string, OpenIssuesResult | null> = {};
+    for (const r of results) {
+      newStatusMap[r.id] = r.status;
+      newIssuesMap[r.id] = r.issues;
+    }
+    setStatusMap((prev) => ({ ...prev, ...newStatusMap }));
+    setIssuesMap((prev) => ({ ...prev, ...newIssuesMap }));
   }, []);
 
-  const handleBump = async () => {
+  const loadProjects = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const next: number = await invoke("bump_launch_count");
-      setLaunchCount(next);
-      toast({
-        title: "已更新启动次数",
-        description: `当前次数: ${next}`,
+      const { listProjects } = await import("@/lib/projects");
+      const list = await listProjects();
+      setProjects(list);
+      setStatusMap(() => {
+        const m: Record<string, ProjectStatus | null> = {};
+        list.forEach((p) => (m[p.id] = null));
+        return m;
       });
+      setIssuesMap(() => {
+        const m: Record<string, OpenIssuesResult | null> = {};
+        list.forEach((p) => (m[p.id] = null));
+        return m;
+      });
+      await refreshEach(list);
     } catch (e) {
       toast({
-        title: "操作失败",
+        title: "加载项目列表失败",
         description: String(e),
         variant: "destructive",
       });
+    } finally {
+      setLoaded(true);
+      setRefreshing(false);
+    }
+  }, [refreshEach]);
+
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects]);
+
+  const handleRefreshAll = async () => {
+    setRefreshing(true);
+    try {
+      const list = await batchRefresh();
+      const newStatusMap: Record<string, ProjectStatus | null> = {};
+      for (const b of list) {
+        newStatusMap[b.id] = b.status;
+      }
+      setStatusMap(newStatusMap);
+      const existingIds = new Set(list.map((b) => b.id));
+      for (const p of projects) {
+        if (!existingIds.has(p.id)) {
+          newStatusMap[p.id] = null;
+        }
+      }
+      await refreshEach(projects);
+      toast({ title: "已刷新所有项目" });
+    } catch (e) {
+      toast({
+        title: "刷新失败",
+        description: String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setRefreshing(false);
     }
   };
 
-  const handleWriteJs = async () => {
+  const handlePullAll = async () => {
+    setPullingAll(true);
     try {
-      const store = await loadStore("frontend.json");
-      const next = jsValue.length > 0 ? `${jsValue}!` : "hello";
-      await store.set("welcome", next);
-      await store.save();
-      setJsValue(next);
-      toast({ title: "JS Store 已保存", description: next });
+      const r = await batchPull();
+      toast({
+        title: "批量 Pull 完成",
+        description: `成功 ${r.updated.length}，跳过 ${r.skipped.length}，失败 ${r.failed.length}`,
+      });
+      await loadProjects();
     } catch (e) {
       toast({
-        title: "保存失败",
+        title: "批量 Pull 失败",
         description: String(e),
         variant: "destructive",
       });
+    } finally {
+      setPullingAll(false);
     }
   };
 
-  const handleReadJs = async () => {
+  const handlePushAll = async () => {
+    setPushConfirmOpen(false);
+    setPushingAll(true);
     try {
-      const store = await loadStore("frontend.json");
-      const v: string | null = (await store.get("welcome")) as string | null;
-      setJsValue(v ?? "");
-      toast({ title: "JS Store 已读取", description: v ?? "(空)" });
+      const r = await batchPush();
+      toast({
+        title: "批量 Push 完成",
+        description: `成功 ${r.pushed.length}，跳过 ${r.skipped.length}，失败 ${r.failed.length}`,
+      });
+      await loadProjects();
     } catch (e) {
       toast({
-        title: "读取失败",
+        title: "批量 Push 失败",
         description: String(e),
         variant: "destructive",
       });
+    } finally {
+      setPushingAll(false);
     }
   };
 
   return (
-    <main className="min-h-screen bg-background p-8 text-foreground">
-      <div className="mx-auto max-w-3xl space-y-6">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Project Hub</h1>
+    <div className="relative">
+      <div className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-6 py-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Project Hub</h1>
           <p className="text-sm text-muted-foreground">
-            Tauri + React + Tailwind + Shadcn/ui 脚手架示例
+            {loaded
+              ? `${projects.length} 个项目`
+              : "加载中…"}
           </p>
-        </header>
-
-        <ProjectRegistry />
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>应用设置</span>
-              <Badge variant="secondary">{loaded ? "已加载" : "加载中"}</Badge>
-            </CardTitle>
-            <CardDescription>
-              通过 Rust 侧的 <code>tauri-plugin-store</code> 读写持久化配置
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <div className="text-sm text-muted-foreground">主题</div>
-              <Badge variant="outline">{theme}</Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+          variant="outline"
+          onClick={handleRefreshAll}
+          disabled={refreshing}
+          >
+          {refreshing ? "刷新中…" : "Refresh All"}
+          </Button>
+          <Button
+          variant="outline"
+          onClick={handlePullAll}
+          disabled={pullingAll}
+          >
+          {pullingAll ? "Pulling…" : "Pull All"}
+          </Button>
+          <Button
+          variant="secondary"
+          onClick={() => setPushConfirmOpen(true)}
+          disabled={pushingAll}
+          >
+          {pushingAll ? "Pushing…" : "Push All"}
+          </Button>
+          <div className="relative">
+          <Button
+            onClick={() => setAddMenuOpen((v) => !v)}
+            onBlur={() => setTimeout(() => setAddMenuOpen(false), 150)}
+          >
+            + Add
+          </Button>
+          {addMenuOpen && (
+            <div
+              onMouseDown={(e) => e.preventDefault()}
+              className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md"
+            >
+              <button
+                className="flex w-full items-start px-3 py-2 text-left text-sm hover:bg-accent"
+                onMouseDown={() => {
+                  setAddDialogMode("manual");
+                  setAddDialogOpen(true);
+                  setAddMenuOpen(false);
+                }}
+              >
+                手动添加
+              </button>
+              <button
+                className="flex w-full items-start px-3 py-2 text-left text-sm hover:bg-accent"
+                onMouseDown={() => {
+                  setAddDialogMode("scan");
+                  setAddDialogOpen(true);
+                  setAddMenuOpen(false);
+                }}
+              >
+                扫描目录
+              </button>
             </div>
-            <div className="space-y-2">
-              <div className="text-sm text-muted-foreground">启动次数</div>
-              <Badge variant="default">{launchCount}</Badge>
-            </div>
-            <div className="sm:col-span-2">
-              <Button onClick={handleBump}>+ 增加一次启动次数 (Rust)</Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>前端 Store</span>
-              <Badge variant="secondary">JS API</Badge>
-            </CardTitle>
-            <CardDescription>
-              通过 <code>@tauri-apps/plugin-store</code> 的 JS API 读写
-              <code>frontend.json</code>
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div>
-              <div className="mb-2 text-sm text-muted-foreground">
-                当前值: <code className="font-mono">{jsValue || "(空)"}</code>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={handleReadJs}>
-                  读取
-                </Button>
-                <Button onClick={handleWriteJs}>写入 &quot;!&quot;</Button>
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button variant="outline">查看详情</Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Store 详情</DialogTitle>
-                      <DialogDescription>
-                        前端持久化文件：<code>frontend.json</code>
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="rounded-md border bg-muted/40 p-3 font-mono text-sm">
-                      {JSON.stringify({ welcome: jsValue }, null, 2)}
-                    </div>
-                    <DialogFooter>
-                      <Button onClick={() => toast({ title: "已确认" })}>
-                        确认
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+          )}
+          </div>
+        </div>
       </div>
-
-      <Toaster />
+    </div>
+    <main className="mx-auto max-w-5xl space-y-4 px-6 py-6">
+      {projects.length === 0 ? (
+        <div className="rounded-lg border border-dashed bg-muted/30 p-12 text-center">
+          <div className="text-2xl font-semibold">还没有项目</div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            点击右上角「+ Add」添加你的第一个项目。
+          </p>
+          <div className="mt-4 flex justify-center gap-2">
+            <Button
+              onClick={() => {
+                setAddDialogMode("manual");
+                setAddDialogOpen(true);
+              }}
+            >
+              手动添加
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAddDialogMode("scan");
+                setAddDialogOpen(true);
+              }}
+            >
+              扫描目录
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {projects.map((p) => (
+            <ProjectCard
+              key={p.id}
+              project={p}
+              status={statusMap[p.id] ?? null}
+              issues={issuesMap[p.id] ?? null}
+              onRefresh={loadProjects}
+              onRemoved={loadProjects}
+            />
+          ))}
+        </div>
+      )}
     </main>
+
+    <AddProjectDialog
+      open={addDialogOpen}
+      onOpenChange={setAddDialogOpen}
+      onAdded={loadProjects}
+      mode={addDialogMode}
+      onModeChange={setAddDialogMode}
+    />
+
+    <Dialog open={pushConfirmOpen} onOpenChange={setPushConfirmOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>确认批量 Push</DialogTitle>
+          <DialogDescription>
+            即将对所有「Need Push」或「Diverged」的项目执行
+            <code className="mx-1">git push</code>
+            。是否继续？
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setPushConfirmOpen(false)}>
+            取消
+          </Button>
+          <Button onClick={handlePushAll}>确认 Push</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Toaster />
+    </div>
   );
+}
+
+function App() {
+  return <ProjectListHome />;
 }
 
 export default App;
