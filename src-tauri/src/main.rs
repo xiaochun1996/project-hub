@@ -2,8 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod git_engine;
 mod models;
 
+use crate::git_engine::{
+    compute_ahead_behind, compute_working_state, derive_sync_status, detect_base_branch,
+};
+use crate::models::ProjectStatus;
 use tauri_plugin_store::StoreExt;
 
 #[tauri::command]
@@ -46,12 +51,33 @@ fn bump_launch_count(app: tauri::AppHandle) -> Result<u64, String> {
     Ok(next)
 }
 
+#[tauri::command]
+fn get_project_status(path: String, base_branch: Option<String>) -> Result<ProjectStatus, String> {
+    let resolved_base = match base_branch {
+        Some(b) if !b.trim().is_empty() => b.trim().to_string(),
+        _ => detect_base_branch(&path),
+    };
+
+    let working_state = compute_working_state(&path);
+    let (ahead, behind) = compute_ahead_behind(&path, &resolved_base);
+    let sync_status = derive_sync_status(ahead, behind);
+
+    Ok(ProjectStatus {
+        working_state,
+        ahead,
+        behind,
+        sync_status,
+        base_branch: resolved_base,
+    })
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             bump_launch_count,
+            get_project_status,
             commands::projects::add_project,
             commands::projects::remove_project,
             commands::projects::list_projects,
