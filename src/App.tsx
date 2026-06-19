@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/toaster";
 import { toast } from "@/hooks/use-toast";
+import ProjectRegistry from "@/pages/projects";
 
 interface Settings {
   theme: string;
@@ -115,6 +116,8 @@ function App() {
             Tauri + React + Tailwind + Shadcn/ui 脚手架示例
           </p>
         </header>
+
+        <ProjectRegistry />
 
         <Card>
           <CardHeader>

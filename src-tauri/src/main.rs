@@ -1,6 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
+mod models;
+
 use tauri_plugin_store::StoreExt;
 
 #[tauri::command]
@@ -46,7 +49,16 @@ fn bump_launch_count(app: tauri::AppHandle) -> Result<u64, String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![get_settings, bump_launch_count])
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            bump_launch_count,
+            commands::projects::add_project,
+            commands::projects::remove_project,
+            commands::projects::list_projects,
+            commands::projects::update_project,
+            commands::projects::scan_directory,
+            commands::projects::import_projects,
+        ])
         .setup(|app| {
             let store = app
                 .store("settings.json")
