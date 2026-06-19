@@ -3,12 +3,14 @@
 
 mod commands;
 mod git_engine;
+mod gh_integration;
 mod models;
 
 use crate::git_engine::{
     compute_ahead_behind, compute_working_state, derive_sync_status, detect_base_branch,
 };
 use crate::models::ProjectStatus;
+use gh_integration::GhError;
 use tauri_plugin_store::StoreExt;
 
 #[tauri::command]
@@ -71,6 +73,11 @@ fn get_project_status(path: String, base_branch: Option<String>) -> Result<Proje
     })
 }
 
+#[tauri::command]
+fn get_open_issues_count(path: String) -> Result<u32, GhError> {
+    gh_integration::get_open_issues_count_impl(&path)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -78,6 +85,7 @@ fn main() {
             get_settings,
             bump_launch_count,
             get_project_status,
+            get_open_issues_count,
             commands::projects::add_project,
             commands::projects::remove_project,
             commands::projects::list_projects,
