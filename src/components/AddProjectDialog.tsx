@@ -9,6 +9,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import { useOperations } from "@/components/OperationContext";
+import { formatInvokeError } from "@/lib/operations";
 import {
   addProject,
   importProjects,
@@ -37,6 +39,8 @@ function AddProjectDialog({
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [importing, setImporting] = useState(false);
+  const ops = useOperations();
+  const addInProgress = ops.globalLoading.add;
 
   const resetAndClose = () => {
     setManualPath("");
@@ -57,6 +61,7 @@ function AddProjectDialog({
       return;
     }
     setManualAdding(true);
+    ops.setGlobal("add", true);
     try {
       const project = await addProject(path);
       toast({ title: "项目已添加", description: project.name });
@@ -65,11 +70,12 @@ function AddProjectDialog({
     } catch (e) {
       toast({
         title: "添加项目失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
     } finally {
       setManualAdding(false);
+      ops.setGlobal("add", false);
     }
   };
 
@@ -83,6 +89,7 @@ function AddProjectDialog({
       return;
     }
     setScanning(true);
+    ops.setGlobal("add", true);
     try {
       const results = await scanDirectory(scanPath.trim());
       setScanResults(results);
@@ -94,11 +101,12 @@ function AddProjectDialog({
     } catch (e) {
       toast({
         title: "扫描失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
     } finally {
       setScanning(false);
+      ops.setGlobal("add", false);
     }
   };
 
@@ -124,6 +132,7 @@ function AddProjectDialog({
       return;
     }
     setImporting(true);
+    ops.setGlobal("add", true);
     try {
       const imported = await importProjects(paths);
       toast({
@@ -135,11 +144,12 @@ function AddProjectDialog({
     } catch (e) {
       toast({
         title: "导入失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
     } finally {
       setImporting(false);
+      ops.setGlobal("add", false);
     }
   };
 

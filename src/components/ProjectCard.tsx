@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import { useOperations } from "@/components/OperationContext";
 import {
   getGitHubRepoUrl,
   openInFinder,
@@ -25,6 +26,7 @@ import {
   removeProject,
   updateProject,
 } from "@/lib/projects";
+import { formatInvokeError } from "@/lib/operations";
 import type { ProjectStatus } from "@/lib/git";
 import type { OpenIssuesResult } from "@/lib/gh";
 import { ghDisplayLabel } from "@/lib/gh";
@@ -60,10 +62,10 @@ function ProjectCard({
   const [baseBranch, setBaseBranch] = useState<string>(project.base_branch ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
-  const [localPulling, setLocalPulling] = useState(false);
-  const [localPushing, setLocalPushing] = useState(false);
   const [githubUrl, setGithubUrl] = useState<string | null>(null);
   const [ghLoading, setGhLoading] = useState(false);
+  const ops = useOperations();
+  const projectOps = ops.state(project.id);
 
   const syncMeta = useMemo(() => {
     if (!status) return null;
@@ -75,37 +77,33 @@ function ProjectCard({
   const showPush =
     status && (status.sync_status === "need_push" || status.sync_status === "diverged");
 
+  const disabled = projectOps.running;
+
   const handlePull = async () => {
-    setLocalPulling(true);
     try {
-      await pullProject(project.path);
+      await ops.runSingle(project.id, "pull", () => pullProject(project.path));
       toast({ title: "Pull 完成", description: project.name });
       onRefresh();
     } catch (e) {
       toast({
         title: "Pull 失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
-    } finally {
-      setLocalPulling(false);
     }
   };
 
   const handlePush = async () => {
-    setLocalPushing(true);
     try {
-      await pushProject(project.path);
+      await ops.runSingle(project.id, "push", () => pushProject(project.path));
       toast({ title: "Push 完成", description: project.name });
       onRefresh();
     } catch (e) {
       toast({
         title: "Push 失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
-    } finally {
-      setLocalPushing(false);
     }
   };
 
@@ -115,68 +113,47 @@ function ProjectCard({
     } catch (e) {
       toast({
         title: "无法打开",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
     }
   };
 
-  const handleGetGithub = async () => {
-    if (githubUrl) {
-      window.open(githubUrl, "_blank");
-      return;
-    }
+  const ensureGithubUrl = async (): Promise<string | null> => {
+    if (githubUrl) return githubUrl;
     setGhLoading(true);
     try {
       const info = await getGitHubRepoUrl(project.path);
       if (info.url) {
         setGithubUrl(info.url);
-        window.open(info.url, "_blank");
-      } else {
-        toast({
-          title: "非 GitHub 仓库",
-          description: "未检测到 GitHub origin",
-          variant: "destructive",
-        });
+        return info.url;
       }
+      toast({
+        title: "非 GitHub 仓库",
+        description: "未检测到 GitHub origin",
+        variant: "destructive",
+      });
+      return null;
     } catch (e) {
       toast({
         title: "获取 GitHub 信息失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
+      return null;
     } finally {
       setGhLoading(false);
     }
+  };
+
+  const handleOpenGithub = async () => {
+    const url = await ensureGithubUrl();
+    if (url) window.open(url, "_blank");
   };
 
   const handleOpenIssues = async () => {
-    if (githubUrl) {
-      window.open(`${githubUrl}/issues`, "_blank");
-      return;
-    }
-    setGhLoading(true);
-    try {
-      const info = await getGitHubRepoUrl(project.path);
-      if (info.url) {
-        setGithubUrl(info.url);
-        window.open(`${info.url}/issues`, "_blank");
-      } else {
-        toast({
-          title: "非 GitHub 仓库",
-          description: "未检测到 GitHub origin",
-          variant: "destructive",
-        });
-      }
-    } catch (e) {
-      toast({
-        title: "获取 GitHub 信息失败",
-        description: String(e),
-        variant: "destructive",
-      });
-    } finally {
-      setGhLoading(false);
-    }
+    const url = await ensureGithubUrl();
+    if (url) window.open(`${url}/issues`, "_blank");
   };
 
   const handleSaveBaseBranch = async () => {
@@ -190,7 +167,7 @@ function ProjectCard({
     } catch (e) {
       toast({
         title: "更新失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
     }
@@ -205,7 +182,7 @@ function ProjectCard({
     } catch (e) {
       toast({
         title: "移除失败",
-        description: String(e),
+        description: formatInvokeError(e),
         variant: "destructive",
       });
     }
@@ -213,19 +190,39 @@ function ProjectCard({
 
   const issuesText = issues ? ghDisplayLabel(issues) : "…";
 
+  const borderCls = projectOps.lastError
+    ? "border-destructive shadow-[0_0_0_1px_rgba(220,38,38,0.3)]"
+    : projectOps.running
+      ? "border-blue-400/60"
+      : "";
+
   return (
-    <Card className="overflow-hidden transition-colors hover:border-foreground/20">
+    <Card className={`overflow-hidden transition-colors hover:border-foreground/20 ${borderCls}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate text-lg font-semibold tracking-tight">
               {project.name}
             </h3>
-            {syncMeta && (
+            {projectOps.running && (
+              <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
+                {projectOps.currentOp === "pull"
+                  ? "Pulling…"
+                  : projectOps.currentOp === "push"
+                    ? "Pushing…"
+                    : "Processing…"}
+              </Badge>
+            )}
+            {projectOps.lastError && (
               <Badge
                 variant="outline"
-                className={`border ${syncMeta.cls}`}
+                className="border-destructive/40 bg-destructive/10 text-destructive"
               >
+                错误
+              </Badge>
+            )}
+            {syncMeta && (
+              <Badge variant="outline" className={`border ${syncMeta.cls}`}>
                 {syncMeta.label}
               </Badge>
             )}
@@ -233,10 +230,20 @@ function ProjectCard({
           <div className="mt-1 break-all font-mono text-xs text-muted-foreground">
             {project.path}
           </div>
+          {projectOps.lastError && (
+            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              {projectOps.lastError}
+            </div>
+          )}
         </div>
         <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
           <DialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="shrink-0 px-2 text-lg leading-none">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 px-2 text-lg leading-none"
+              disabled={disabled}
+            >
               ⋯
             </Button>
           </DialogTrigger>
@@ -293,23 +300,23 @@ function ProjectCard({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {showPull && (
-            <Button size="sm" onClick={handlePull} disabled={localPulling}>
-              {localPulling ? "Pulling..." : "Pull"}
+            <Button size="sm" onClick={handlePull} disabled={disabled}>
+              {projectOps.running && projectOps.currentOp === "pull" ? "Pulling…" : "Pull"}
             </Button>
           )}
           {showPush && (
-            <Button size="sm" variant="secondary" onClick={handlePush} disabled={localPushing}>
-              {localPushing ? "Pushing..." : "Push"}
+            <Button size="sm" variant="secondary" onClick={handlePush} disabled={disabled}>
+              {projectOps.running && projectOps.currentOp === "push" ? "Pushing…" : "Push"}
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={handleOpenFinder}>
+          <Button size="sm" variant="outline" onClick={handleOpenFinder} disabled={disabled}>
             Finder
           </Button>
           <Button
             size="sm"
             variant="outline"
-            onClick={handleGetGithub}
-            disabled={ghLoading}
+            onClick={handleOpenGithub}
+            disabled={disabled || ghLoading}
           >
             GitHub
           </Button>
@@ -317,7 +324,7 @@ function ProjectCard({
             size="sm"
             variant="outline"
             onClick={handleOpenIssues}
-            disabled={ghLoading}
+            disabled={disabled || ghLoading}
           >
             Issues
           </Button>
