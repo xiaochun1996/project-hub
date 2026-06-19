@@ -92,6 +92,12 @@ fn main() {
             commands::projects::update_project,
             commands::projects::scan_directory,
             commands::projects::import_projects,
+            commands::git::git_fetch,
+            commands::git::git_pull,
+            commands::git::git_push,
+            commands::git::batch_refresh,
+            commands::git::batch_pull,
+            commands::git::batch_push,
         ])
         .setup(|app| {
             let store = app
