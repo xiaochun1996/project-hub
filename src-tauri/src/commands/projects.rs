@@ -6,10 +6,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
-use crate::git_engine::{
-    compute_ahead_behind, compute_working_state, derive_sync_status, detect_base_branch,
-};
-use crate::models::{Project, ProjectConfig, ProjectStatus, SyncStatus, WorkingState};
+use crate::models::{Project, ProjectConfig};
 
 const STORE_FILE: &str = "projects.json";
 const STORE_KEY: &str = "projects";
@@ -82,23 +79,6 @@ fn build_project_from_path(path_str: &str) -> Result<Project, String> {
         base_branch: None,
         added_at: Utc::now().to_rfc3339(),
     })
-}
-
-fn compute_project_status(path: &str, base_branch: &Option<String>) -> ProjectStatus {
-    let resolved_base = match base_branch {
-        Some(b) if !b.trim().is_empty() => b.trim().to_string(),
-        _ => detect_base_branch(path),
-    };
-    let working_state = compute_working_state(path);
-    let (ahead, behind) = compute_ahead_behind(path, &resolved_base);
-    let sync_status = derive_sync_status(ahead, behind);
-    ProjectStatus {
-        working_state,
-        ahead,
-        behind,
-        sync_status,
-        base_branch: resolved_base,
-    }
 }
 
 #[tauri::command]
@@ -219,37 +199,6 @@ pub fn import_projects(app: AppHandle, paths: Vec<String>) -> Result<Vec<Project
     Ok(imported)
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ProjectBatchStatus {
-    pub id: String,
-    pub status: ProjectStatus,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BatchPullResult {
-    pub updated: Vec<String>,
-    pub skipped: Vec<String>,
-    pub failed: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BatchPushResult {
-    pub pushed: Vec<String>,
-    pub skipped: Vec<String>,
-    pub failed: Vec<(String, String)>,
-}
-
-#[tauri::command]
-pub fn batch_refresh(app: AppHandle) -> Result<Vec<ProjectBatchStatus>, String> {
-    let projects = load_projects(&app)?;
-    let mut out: Vec<ProjectBatchStatus> = Vec::with_capacity(projects.len());
-    for p in projects {
-        let status = compute_project_status(&p.path, &p.base_branch);
-        out.push(ProjectBatchStatus { id: p.id, status });
-    }
-    Ok(out)
-}
-
 fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
     use std::process::Command;
     let output = Command::new("git")
@@ -267,60 +216,6 @@ fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
             stderr
         })
     }
-}
-
-#[tauri::command]
-pub fn batch_pull(app: AppHandle) -> Result<BatchPullResult, String> {
-    let projects = load_projects(&app)?;
-    let mut updated: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    let mut failed: Vec<(String, String)> = Vec::new();
-
-    for p in projects {
-        let status = compute_project_status(&p.path, &p.base_branch);
-        let needs_pull = matches!(status.sync_status, SyncStatus::NeedPull | SyncStatus::Diverged);
-        if !needs_pull {
-            skipped.push(p.id);
-            continue;
-        }
-        match run_git(&p.path, &["pull"]) {
-            Ok(_) => updated.push(p.id),
-            Err(e) => failed.push((p.id, e)),
-        }
-    }
-
-    Ok(BatchPullResult {
-        updated,
-        skipped,
-        failed,
-    })
-}
-
-#[tauri::command]
-pub fn batch_push(app: AppHandle) -> Result<BatchPushResult, String> {
-    let projects = load_projects(&app)?;
-    let mut pushed: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    let mut failed: Vec<(String, String)> = Vec::new();
-
-    for p in projects {
-        let status = compute_project_status(&p.path, &p.base_branch);
-        let needs_push = matches!(status.sync_status, SyncStatus::NeedPush | SyncStatus::Diverged);
-        if !needs_push {
-            skipped.push(p.id);
-            continue;
-        }
-        match run_git(&p.path, &["push"]) {
-            Ok(_) => pushed.push(p.id),
-            Err(e) => failed.push((p.id, e)),
-        }
-    }
-
-    Ok(BatchPushResult {
-        pushed,
-        skipped,
-        failed,
-    })
 }
 
 #[tauri::command]
@@ -381,7 +276,4 @@ pub fn get_github_repo_url(path: String) -> Result<GitHubRepoInfo, String> {
     Ok(GitHubRepoInfo { url, owner_repo })
 }
 
-#[allow(dead_code)]
-fn _working_state_alias(_: WorkingState) -> bool {
-    true
-}
+

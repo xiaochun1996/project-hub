@@ -39,3 +39,11 @@ pub struct ProjectStatus {
     pub sync_status: SyncStatus,
     pub base_branch: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueInfo {
+    pub number: u32,
+    pub title: String,
+    pub created_at: String,
+    pub state: String,
+}

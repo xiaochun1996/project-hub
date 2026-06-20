@@ -92,9 +92,6 @@ fn main() {
             commands::projects::update_project,
             commands::projects::scan_directory,
             commands::projects::import_projects,
-            commands::projects::batch_refresh,
-            commands::projects::batch_pull,
-            commands::projects::batch_push,
             commands::projects::pull_project,
             commands::projects::push_project,
             commands::projects::open_in_finder,
@@ -105,6 +102,8 @@ fn main() {
             commands::git::batch_refresh,
             commands::git::batch_pull,
             commands::git::batch_push,
+            commands::issues::list_issues,
+            commands::issues::close_issue,
         ])
         .setup(|app| {
             let store = app
@@ -112,9 +111,9 @@ fn main() {
                 .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to open store: {e}").into() })?;
             if !store.has("launch_count") {
                 store.set("launch_count", serde_json::Value::from(0u64));
-                store
-                    .save()
-                    .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to save store: {e}").into() })?;
+                if let Err(e) = store.save() {
+                    eprintln!("[dev] warning: failed to persist store: {e}");
+                }
             }
             Ok(())
         })
