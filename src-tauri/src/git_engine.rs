@@ -6,6 +6,7 @@ pub fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .current_dir(path)
         .args(args)
+        .env("PATH", crate::gh_integration::extended_path())
         .output()
         .map_err(|e| format!("failed to execute git: {e}"))?;
 

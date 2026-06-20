@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/toaster";
 import { toast } from "@/hooks/use-toast";
-import { OperationProvider, useOperations } from "@/components/OperationContext";
+import { OperationProvider, useOperations, useOperationActions } from "@/components/OperationContext";
 import ProjectCard from "@/components/ProjectCard";
 import AddProjectDialog from "@/components/AddProjectDialog";
 import {
@@ -20,8 +20,8 @@ import {
   Project,
 } from "@/lib/projects";
 import { buildBatchSummary, formatInvokeError } from "@/lib/operations";
-import { getProjectStatus, ProjectStatus } from "@/lib/git";
-import { getOpenIssuesCount, OpenIssuesResult } from "@/lib/gh";
+import { ProjectStatus } from "@/lib/git";
+import { OpenIssuesResult } from "@/lib/gh";
 
 function ProjectListHome() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -35,58 +35,36 @@ function ProjectListHome() {
   const [pushing, setPushing] = useState(false);
 
   const ops = useOperations();
+  const actions = useOperationActions();
   const refreshing = ops.globalLoading.refresh;
   const pullingAll = ops.globalLoading.pull;
 
-  const refreshEach = useCallback(async (list: Project[]) => {
-    const results: { id: string; status: ProjectStatus | null; issues: OpenIssuesResult | null }[] = [];
-    await Promise.all(
-      list.map(async (p) => {
-        const [status, issues] = await Promise.allSettled([
-          getProjectStatus(p.path, p.base_branch ?? undefined),
-          getOpenIssuesCount(p.path),
-        ]);
-        const s = status.status === "fulfilled" ? status.value : null;
-        const i =
-          issues.status === "fulfilled"
-            ? issues.value
-            : {
-                status: "error" as const,
-                error: {
-                  code: "CommandFailed" as const,
-                  message: formatInvokeError(
-                    issues.status === "rejected" ? issues.reason : "unknown",
-                  ),
-                },
-              };
-        results.push({ id: p.id, status: s, issues: i });
-      }),
-    );
-    const newStatusMap: Record<string, ProjectStatus | null> = {};
-    const newIssuesMap: Record<string, OpenIssuesResult | null> = {};
-    for (const r of results) {
-      newStatusMap[r.id] = r.status;
-      newIssuesMap[r.id] = r.issues;
-    }
-    setStatusMap((prev) => ({ ...prev, ...newStatusMap }));
-    setIssuesMap((prev) => ({ ...prev, ...newIssuesMap }));
-  }, []);
-
   const loadProjects = useCallback(async () => {
-    ops.setGlobal("refresh", true);
+    actions.setGlobal("refresh", true);
     try {
       const { listProjects } = await import("@/lib/projects");
       const list = await listProjects();
       setProjects(list);
-      const initialStatus: Record<string, ProjectStatus | null> = {};
-      const initialIssues: Record<string, OpenIssuesResult | null> = {};
-      list.forEach((p) => {
-        initialStatus[p.id] = null;
-        initialIssues[p.id] = null;
-      });
-      setStatusMap(initialStatus);
-      setIssuesMap(initialIssues);
-      await refreshEach(list);
+
+      if (list.length === 0) {
+        setStatusMap({});
+        setIssuesMap({});
+        setLoaded(true);
+        actions.setGlobal("refresh", false);
+        return;
+      }
+
+      const batch = await batchRefresh();
+      const newStatusMap: Record<string, ProjectStatus | null> = {};
+      const newIssuesMap: Record<string, OpenIssuesResult | null> = {};
+      for (const b of batch) {
+        newStatusMap[b.id] = b.status ?? null;
+        newIssuesMap[b.id] = b.open_issues != null
+          ? { status: "ok", count: b.open_issues }
+          : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } };
+      }
+      setStatusMap(newStatusMap);
+      setIssuesMap(newIssuesMap);
     } catch (e) {
       toast({
         title: "加载项目列表失败",
@@ -95,9 +73,9 @@ function ProjectListHome() {
       });
     } finally {
       setLoaded(true);
-      ops.setGlobal("refresh", false);
+      actions.setGlobal("refresh", false);
     }
-  }, [refreshEach, ops]);
+  }, [actions]);
 
   useEffect(() => {
     loadProjects();
@@ -108,12 +86,16 @@ function ProjectListHome() {
     try {
       const batch = await batchRefresh();
       const newStatusMap: Record<string, ProjectStatus | null> = {};
+      const newIssuesMap: Record<string, OpenIssuesResult | null> = {};
       for (const b of batch) {
-        newStatusMap[b.id] = b.status;
+        newStatusMap[b.id] = b.status ?? null;
+        newIssuesMap[b.id] = b.open_issues != null
+          ? { status: "ok", count: b.open_issues }
+          : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } };
         ops.clearError(b.id);
       }
       setStatusMap(newStatusMap);
-      await refreshEach(projects);
+      setIssuesMap(newIssuesMap);
       if (batch.length > 0) {
         toast({ title: "已刷新所有项目", description: `共 ${batch.length} 个` });
       }

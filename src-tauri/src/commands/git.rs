@@ -1,12 +1,11 @@
-use std::process::Command;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_store::StoreExt;
+use tokio::sync::Semaphore;
 
-use crate::git_engine::{
-    compute_ahead_behind, compute_working_state, derive_sync_status, detect_base_branch,
-};
+use crate::git_engine::{self, compute_ahead_behind, compute_working_state, derive_sync_status, detect_base_branch};
 use crate::models::{Project, ProjectStatus, SyncStatus, WorkingState};
 
 const STORE_FILE: &str = "projects.json";
@@ -74,23 +73,27 @@ struct BatchCompleteEvent {
     failures: Vec<BatchFailure>,
 }
 
-fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(args)
-        .output()
-        .map_err(|e| format!("failed to execute git: {e}"))?;
+// ── Batch operation result types (matched to frontend TS types) ──
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(if stderr.is_empty() {
-            format!("git {:?} failed with status {}", args, output.status)
-        } else {
-            stderr
-        })
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectBatchStatus {
+    pub id: String,
+    pub status: ProjectStatus,
+    pub open_issues: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchPullResult {
+    pub updated: Vec<String>,
+    pub skipped: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchPushResult {
+    pub pushed: Vec<String>,
+    pub skipped: Vec<String>,
+    pub failed: Vec<(String, String)>,
 }
 
 fn is_dirty(path: &str) -> bool {
@@ -98,7 +101,7 @@ fn is_dirty(path: &str) -> bool {
 }
 
 fn fetch_internal(path: &str) -> Result<(), GitError> {
-    run_git(path, &["fetch", "origin"]).map_err(|err| {
+    git_engine::run_git(path, &["fetch", "origin"]).map_err(|err| {
         if err.contains("resolve") || err.contains("unable to access") || err.contains("network") {
             GitError::NetworkError(err)
         } else if err.contains("not a git repository") {
@@ -112,11 +115,11 @@ fn fetch_internal(path: &str) -> Result<(), GitError> {
 
 fn pull_internal(path: &str, base_branch: &str) -> Result<(bool, String), GitError> {
     let dirty = is_dirty(path);
-    match run_git(path, &["pull", "--rebase", "origin", base_branch]) {
+    match git_engine::run_git(path, &["pull", "--rebase", "origin", base_branch]) {
         Ok(out) => Ok((dirty, out)),
         Err(err) => {
             if err.contains("CONFLICT") || err.contains("conflict") || err.contains("Merge conflict") {
-                let _ = run_git(path, &["rebase", "--abort"]);
+                let _ = git_engine::run_git(path, &["rebase", "--abort"]);
                 Err(GitError::MergeConflict)
             } else if err.contains("dirty") || err.contains("Your local changes") {
                 Err(GitError::Dirty)
@@ -131,7 +134,7 @@ fn push_internal(path: &str) -> Result<(bool, u32, String), GitError> {
     let dirty = is_dirty(path);
     let base = detect_base_branch(path);
     let (ahead_before, _) = compute_ahead_behind(path, &base);
-    match run_git(path, &["push", "origin", "HEAD"]) {
+    match git_engine::run_git(path, &["push", "origin", "HEAD"]) {
         Ok(out) => {
             let (ahead_after, _) = compute_ahead_behind(path, &base);
             let pushed = ahead_before.saturating_sub(ahead_after);
@@ -186,14 +189,6 @@ fn load_projects(app: &AppHandle) -> Result<Vec<Project>, String> {
     } else {
         Ok(Vec::new())
     }
-}
-
-fn find_project(app: &AppHandle, id: &str) -> Result<Project, GitError> {
-    let projects = load_projects(app).map_err(|_| GitError::Unknown("project store error".into()))?;
-    projects
-        .into_iter()
-        .find(|p| p.id == id)
-        .ok_or(GitError::InvalidPath)
 }
 
 fn resolve_base(path: &str, base_branch: Option<String>) -> String {
@@ -272,230 +267,192 @@ pub fn git_push(path: String) -> Result<PushResult, GitError> {
     })
 }
 
-#[tauri::command]
-pub fn batch_refresh(app: AppHandle, project_ids: Vec<String>) -> Vec<(String, RefreshResult)> {
-    let operation = "refresh";
-    let mut results: Vec<(String, RefreshResult)> = Vec::new();
-    let mut failures: Vec<BatchFailure> = Vec::new();
+fn git_error_msg(err: &GitError) -> String {
+    match err {
+        GitError::MergeConflict => "merge conflict encountered, rebase aborted".into(),
+        GitError::Dirty => "working tree is dirty, please commit or stash".into(),
+        GitError::PullFailed(m) => m.clone(),
+        GitError::PushFailed(m) => m.clone(),
+        GitError::NetworkError(m) => m.clone(),
+        GitError::FetchFailed(m) => m.clone(),
+        GitError::RepositoryNotFound => "repository not found".into(),
+        GitError::InvalidPath => "invalid path".into(),
+        GitError::Unknown(m) => m.clone(),
+    }
+}
 
-    for project_id in project_ids.iter() {
-        emit_op_start(&app, project_id, operation);
-        match find_project(&app, project_id) {
-            Ok(project) => {
-                let result = refresh_internal(&project.path, project.base_branch.clone());
-                emit_op_complete(&app, project_id, operation, to_json(&result));
-                results.push((project_id.clone(), result));
-            }
-            Err(err) => {
-                let msg = format!("{:?}", err);
-                emit_op_complete(
-                    &app,
-                    project_id,
-                    operation,
-                    to_json(&serde_json::json!({ "success": false, "error": msg })),
-                );
-                failures.push(BatchFailure {
-                    project_id: project_id.clone(),
-                    error: msg,
-                });
-            }
-        }
+// ── Batch operations (async, concurrent, max 3 in-flight) ──
+
+#[tauri::command]
+pub async fn batch_refresh(app: AppHandle) -> Vec<ProjectBatchStatus> {
+    let projects = load_projects(&app).unwrap_or_default();
+    let sem = Arc::new(Semaphore::new(3));
+    let mut handles = Vec::new();
+
+    for p in projects {
+        let sem = sem.clone();
+        let app = app.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let id = p.id.clone();
+            let path = p.path.clone();
+            let base = p.base_branch.clone();
+            tokio::task::spawn_blocking(move || {
+                emit_op_start(&app, &id, "refresh");
+                let result = refresh_internal(&path, base);
+                emit_op_complete(&app, &id, "refresh", to_json(&result));
+                (id, result)
+            })
+            .await
+            .ok()
+        }));
     }
 
-    emit_batch_complete(&app, operation, results.len(), failures);
-    results
+    let mut items: Vec<ProjectBatchStatus> = Vec::new();
+    let failures: Vec<BatchFailure> = Vec::new();
+    for h in handles {
+        if let Some((id, result)) = h.await.unwrap_or_default() {
+            items.push(ProjectBatchStatus { id, status: result.status, open_issues: result.open_issues });
+        }
+    }
+    emit_batch_complete(&app, "refresh", items.len(), failures);
+    items
 }
 
 #[tauri::command]
-pub fn batch_pull(app: AppHandle, project_ids: Vec<String>) -> Vec<(String, PullResult)> {
-    let operation = "pull";
-    let mut results: Vec<(String, PullResult)> = Vec::new();
-    let mut failures: Vec<BatchFailure> = Vec::new();
+pub async fn batch_pull(app: AppHandle) -> BatchPullResult {
+    let projects = load_projects(&app).unwrap_or_default();
+    let sem = Arc::new(Semaphore::new(3));
+    let mut handles = Vec::new();
 
-    for project_id in project_ids.iter() {
-        emit_op_start(&app, project_id, operation);
-        match find_project(&app, project_id) {
-            Ok(project) => {
-                let base = resolve_base(&project.path, project.base_branch.clone());
-                let (_, behind_before) = compute_ahead_behind(&project.path, &base);
+    for p in projects {
+        let sem = sem.clone();
+        let app = app.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let id = p.id.clone();
+            let path = p.path.clone();
+            let base_branch = p.base_branch.clone();
+            tokio::task::spawn_blocking(move || {
+                emit_op_start(&app, &id, "pull");
+                let base = resolve_base(&path, base_branch);
+                let (_, behind) = compute_ahead_behind(&path, &base);
 
-                if behind_before > 0 {
-                    match pull_internal(&project.path, &base) {
-                        Ok((dirty, msg)) => {
-                            let result = PullResult {
-                                success: true,
-                                is_dirty: dirty,
-                                message: msg,
-                            };
-                            emit_op_complete(&app, project_id, operation, to_json(&result));
-                            results.push((project_id.clone(), result));
-                        }
-                        Err(err) => {
-                            let msg = match err {
-                                GitError::MergeConflict => {
-                                    "merge conflict encountered, rebase aborted".into()
-                                }
-                                GitError::Dirty => {
-                                    "working tree is dirty, please commit or stash".into()
-                                }
-                                GitError::PullFailed(m) => m,
-                                GitError::NetworkError(m) => m,
-                                GitError::RepositoryNotFound => "repository not found".into(),
-                                GitError::InvalidPath => "invalid path".into(),
-                                GitError::Unknown(m) => m,
-                                GitError::FetchFailed(m) => m,
-                                GitError::PushFailed(m) => m,
-                            };
-                            let dirty = is_dirty(&project.path);
-                            let result = PullResult {
-                                success: false,
-                                is_dirty: dirty,
-                                message: msg.clone(),
-                            };
-                            emit_op_complete(&app, project_id, operation, to_json(&result));
-                            results.push((project_id.clone(), result));
-                            failures.push(BatchFailure {
-                                project_id: project_id.clone(),
-                                error: msg,
-                            });
-                        }
-                    }
-                } else {
-                    let dirty = is_dirty(&project.path);
-                    let result = PullResult {
-                        success: true,
-                        is_dirty: dirty,
-                        message: "already up to date".into(),
-                    };
-                    emit_op_complete(&app, project_id, operation, to_json(&result));
-                    results.push((project_id.clone(), result));
+                if behind == 0 {
+                    emit_op_complete(&app, &id, "pull", to_json(&PullResult {
+                        success: true, is_dirty: is_dirty(&path), message: "already up to date".into(),
+                    }));
+                    return (id, "skipped".to_string(), String::new());
                 }
-            }
-            Err(err) => {
-                let msg = format!("{:?}", err);
-                let result = PullResult {
-                    success: false,
-                    is_dirty: false,
-                    message: msg.clone(),
-                };
-                emit_op_complete(&app, project_id, operation, to_json(&result));
-                results.push((project_id.clone(), result));
-                failures.push(BatchFailure {
-                    project_id: project_id.clone(),
-                    error: msg,
-                });
+
+                match pull_internal(&path, &base) {
+                    Ok((dirty, msg)) => {
+                        emit_op_complete(&app, &id, "pull", to_json(&PullResult {
+                            success: true, is_dirty: dirty, message: msg.clone(),
+                        }));
+                        (id, "updated".to_string(), String::new())
+                    }
+                    Err(err) => {
+                        let msg = git_error_msg(&err);
+                        emit_op_complete(&app, &id, "pull", to_json(&PullResult {
+                            success: false, is_dirty: is_dirty(&path), message: msg.clone(),
+                        }));
+                        (id, "failed".to_string(), msg)
+                    }
+                }
+            })
+            .await
+            .unwrap_or_default()
+        }));
+    }
+
+    let mut updated: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    for h in handles {
+        if let Ok((id, status, err)) = h.await {
+            match status.as_str() {
+                "updated" => updated.push(id),
+                "skipped" => skipped.push(id),
+                _ => failed.push((id, err)),
             }
         }
     }
-
-    let success_count = results.iter().filter(|(_, r)| r.success).count();
-    emit_batch_complete(&app, operation, success_count, failures);
-    results
+    let batch_failures: Vec<BatchFailure> = failed.iter().map(|(id, e)| BatchFailure { project_id: id.clone(), error: e.clone() }).collect();
+    emit_batch_complete(&app, "pull", updated.len(), batch_failures);
+    BatchPullResult { updated, skipped, failed }
 }
 
 #[tauri::command]
-pub fn batch_push(app: AppHandle, project_ids: Vec<String>) -> Vec<(String, PushResult)> {
-    let operation = "push";
-    let mut results: Vec<(String, PushResult)> = Vec::new();
-    let mut failures: Vec<BatchFailure> = Vec::new();
+pub async fn batch_push(app: AppHandle) -> BatchPushResult {
+    let projects = load_projects(&app).unwrap_or_default();
+    let sem = Arc::new(Semaphore::new(3));
+    let mut handles = Vec::new();
 
-    for project_id in project_ids.iter() {
-        emit_op_start(&app, project_id, operation);
-        match find_project(&app, project_id) {
-            Ok(project) => {
-                let base = resolve_base(&project.path, project.base_branch.clone());
-                let (ahead_before, behind_before) = compute_ahead_behind(&project.path, &base);
-                let status_before = derive_sync_status(ahead_before, behind_before);
+    for p in projects {
+        let sem = sem.clone();
+        let app = app.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let id = p.id.clone();
+            let path = p.path.clone();
+            let base_branch = p.base_branch.clone();
+            tokio::task::spawn_blocking(move || {
+                emit_op_start(&app, &id, "push");
+                let base = resolve_base(&path, base_branch);
+                let (ahead, behind) = compute_ahead_behind(&path, &base);
+                let status = derive_sync_status(ahead, behind);
 
-                if status_before == SyncStatus::Diverged {
-                    let msg = "diverged project skipped (pull first)".to_string();
-                    let dirty = is_dirty(&project.path);
-                    let result = PushResult {
-                        success: false,
-                        is_dirty: dirty,
-                        commits_pushed: 0,
-                        message: msg.clone(),
-                    };
-                    emit_op_complete(&app, project_id, operation, to_json(&result));
-                    results.push((project_id.clone(), result));
-                    failures.push(BatchFailure {
-                        project_id: project_id.clone(),
-                        error: msg,
-                    });
-                    continue;
+                if status == SyncStatus::Diverged {
+                    emit_op_complete(&app, &id, "push", to_json(&PushResult {
+                        success: true, is_dirty: is_dirty(&path), commits_pushed: 0,
+                        message: "diverged — pull first".into(),
+                    }));
+                    return (id, "skipped".to_string(), String::new());
                 }
 
-                if ahead_before > 0 {
-                    match push_internal(&project.path) {
-                        Ok((dirty, pushed, msg)) => {
-                            let result = PushResult {
-                                success: true,
-                                is_dirty: dirty,
-                                commits_pushed: pushed,
-                                message: msg,
-                            };
-                            emit_op_complete(&app, project_id, operation, to_json(&result));
-                            results.push((project_id.clone(), result));
-                        }
-                        Err(err) => {
-                            let msg = match err {
-                                GitError::PushFailed(m) => m,
-                                GitError::NetworkError(m) => m,
-                                GitError::RepositoryNotFound => "repository not found".into(),
-                                GitError::InvalidPath => "invalid path".into(),
-                                GitError::Unknown(m) => m,
-                                GitError::FetchFailed(m) => m,
-                                GitError::PullFailed(m) => m,
-                                GitError::MergeConflict => "merge conflict".into(),
-                                GitError::Dirty => "dirty".into(),
-                            };
-                            let dirty = is_dirty(&project.path);
-                            let result = PushResult {
-                                success: false,
-                                is_dirty: dirty,
-                                commits_pushed: 0,
-                                message: msg.clone(),
-                            };
-                            emit_op_complete(&app, project_id, operation, to_json(&result));
-                            results.push((project_id.clone(), result));
-                            failures.push(BatchFailure {
-                                project_id: project_id.clone(),
-                                error: msg,
-                            });
-                        }
-                    }
-                } else {
-                    let _ = behind_before;
-                    let dirty = is_dirty(&project.path);
-                    let result = PushResult {
-                        success: true,
-                        is_dirty: dirty,
-                        commits_pushed: 0,
+                if ahead == 0 {
+                    emit_op_complete(&app, &id, "push", to_json(&PushResult {
+                        success: true, is_dirty: is_dirty(&path), commits_pushed: 0,
                         message: "nothing to push".into(),
-                    };
-                    emit_op_complete(&app, project_id, operation, to_json(&result));
-                    results.push((project_id.clone(), result));
+                    }));
+                    return (id, "skipped".to_string(), String::new());
                 }
-            }
-            Err(err) => {
-                let msg = format!("{:?}", err);
-                let result = PushResult {
-                    success: false,
-                    is_dirty: false,
-                    commits_pushed: 0,
-                    message: msg.clone(),
-                };
-                emit_op_complete(&app, project_id, operation, to_json(&result));
-                results.push((project_id.clone(), result));
-                failures.push(BatchFailure {
-                    project_id: project_id.clone(),
-                    error: msg,
-                });
+
+                match push_internal(&path) {
+                    Ok((dirty, count, msg)) => {
+                        emit_op_complete(&app, &id, "push", to_json(&PushResult {
+                            success: true, is_dirty: dirty, commits_pushed: count, message: msg.clone(),
+                        }));
+                        (id, "pushed".to_string(), String::new())
+                    }
+                    Err(err) => {
+                        let msg = git_error_msg(&err);
+                        emit_op_complete(&app, &id, "push", to_json(&PushResult {
+                            success: false, is_dirty: is_dirty(&path), commits_pushed: 0, message: msg.clone(),
+                        }));
+                        (id, "failed".to_string(), msg)
+                    }
+                }
+            })
+            .await
+            .unwrap_or_default()
+        }));
+    }
+
+    let mut pushed: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    for h in handles {
+        if let Ok((id, status, err)) = h.await {
+            match status.as_str() {
+                "pushed" => pushed.push(id),
+                "skipped" => skipped.push(id),
+                _ => failed.push((id, err)),
             }
         }
     }
-
-    let success_count = results.iter().filter(|(_, r)| r.success).count();
-    emit_batch_complete(&app, operation, success_count, failures);
-    results
+    let batch_failures: Vec<BatchFailure> = failed.iter().map(|(id, e)| BatchFailure { project_id: id.clone(), error: e.clone() }).collect();
+    emit_batch_complete(&app, "push", pushed.len(), batch_failures);
+    BatchPushResult { pushed, skipped, failed }
 }

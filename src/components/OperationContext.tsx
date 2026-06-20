@@ -32,7 +32,21 @@ interface OperationContextValue {
   clearError: (projectId: string) => void;
 }
 
-const OperationContext = createContext<OperationContextValue | null>(null);
+// Split into two contexts: stable actions (never change) and reactive state.
+// This prevents infinite re-render loops when actions like setGlobal cause
+// state changes that would otherwise invalidate callbacks depending on the context.
+const ActionsContext = createContext<{
+  startOp: (projectId: string, op: OperationKind) => void;
+  completeOp: (projectId: string, op: OperationKind, error?: string) => void;
+  setGlobal: (op: OperationKind, loading: boolean) => void;
+  runSingle: <T>(projectId: string, op: OperationKind, fn: () => Promise<T>) => Promise<T>;
+  clearError: (projectId: string) => void;
+} | null>(null);
+
+const StateContext = createContext<{
+  globalLoading: Record<OperationKind, boolean>;
+  state: (projectId: string) => PerProjectState;
+} | null>(null);
 
 function emptyPer(): PerProjectState {
   return { running: false };
@@ -147,26 +161,44 @@ export function OperationProvider({ children }: { children: ReactNode }) {
     };
   }, [startOp, completeOp]);
 
-  const value = useMemo<OperationContextValue>(
+  const actionsValue = useMemo(
+    () => ({ startOp, completeOp, setGlobal, runSingle, clearError }),
+    [startOp, completeOp, setGlobal, runSingle, clearError],
+  );
+
+  const stateValue = useMemo(
     () => ({
       globalLoading,
       state: (projectId: string) => perProject[projectId] ?? emptyPer(),
-      startOp,
-      completeOp,
-      setGlobal,
-      runSingle,
-      clearError,
     }),
-    [globalLoading, perProject, startOp, completeOp, setGlobal, runSingle, clearError],
+    [globalLoading, perProject],
   );
 
-  return <OperationContext.Provider value={value}>{children}</OperationContext.Provider>;
+  return (
+    <ActionsContext.Provider value={actionsValue}>
+      <StateContext.Provider value={stateValue}>{children}</StateContext.Provider>
+    </ActionsContext.Provider>
+  );
 }
 
 export function useOperations(): OperationContextValue {
-  const ctx = useContext(OperationContext);
-  if (!ctx) {
+  const actions = useContext(ActionsContext);
+  const state = useContext(StateContext);
+  if (!actions || !state) {
     throw new Error("useOperations 必须在 <OperationProvider> 内部使用");
   }
-  return ctx;
+  return { ...state, ...actions };
+}
+
+/**
+ * Returns only the stable action functions from OperationContext.
+ * Use this in useCallback/useEffect deps to avoid infinite re-render loops
+ * caused by reactive state changes (globalLoading, perProject).
+ */
+export function useOperationActions() {
+  const actions = useContext(ActionsContext);
+  if (!actions) {
+    throw new Error("useOperationActions 必须在 <OperationProvider> 内部使用");
+  }
+  return actions;
 }

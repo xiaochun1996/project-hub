@@ -71,3 +71,18 @@ export function ghDisplayLabel(result: OpenIssuesResult): string {
   }
   return "N/A";
 }
+
+export interface IssueInfo {
+  number: number;
+  title: string;
+  created_at: string;
+  state: string;
+}
+
+export async function listIssues(path: string): Promise<IssueInfo[]> {
+  return await invoke<IssueInfo[]>("list_issues", { path });
+}
+
+export async function closeIssue(path: string, number: number, reason: string): Promise<void> {
+  await invoke<void>("close_issue", { path, number, reason });
+}

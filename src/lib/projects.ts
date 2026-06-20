@@ -43,6 +43,7 @@ export async function importProjects(paths: string[]): Promise<Project[]> {
 export interface ProjectBatchStatus {
   id: string;
   status: import("./git").ProjectStatus;
+  open_issues: number | null;
 }
 
 export interface BatchPullResult {
@@ -69,8 +70,8 @@ export async function batchPush(): Promise<BatchPushResult> {
   return await invoke<BatchPushResult>("batch_push");
 }
 
-export async function pullProject(path: string): Promise<string> {
-  return await invoke<string>("pull_project", { path });
+export async function pullProject(path: string, baseBranch?: string): Promise<string> {
+  return await invoke<string>("pull_project", { path, baseBranch: baseBranch ?? null });
 }
 
 export async function pushProject(path: string): Promise<string> {

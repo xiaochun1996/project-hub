@@ -6,6 +6,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
+use crate::git_engine::{self, detect_base_branch};
 use crate::models::{Project, ProjectConfig};
 
 const STORE_FILE: &str = "projects.json";
@@ -85,11 +86,14 @@ fn build_project_from_path(path_str: &str) -> Result<Project, String> {
 pub fn add_project(app: AppHandle, path: String) -> Result<Project, String> {
     let mut projects = load_projects(&app)?;
 
-    if projects.iter().any(|p| p.path == path) {
-        return Err(format!("project already exists: {}", path));
+    let canon = Path::new(&path).canonicalize().map_err(|e| format!("failed to resolve path: {e}"))?;
+    let canon_str = canon.to_str().ok_or_else(|| "invalid utf-8 path".to_string())?.to_string();
+
+    if projects.iter().any(|p| p.path == canon_str) {
+        return Err(format!("project already exists: {}", canon_str));
     }
 
-    let project = build_project_from_path(&path)?;
+    let project = build_project_from_path(&canon_str)?;
     projects.push(project.clone());
     save_projects(&app, &projects)?;
     Ok(project)
@@ -183,10 +187,13 @@ pub fn import_projects(app: AppHandle, paths: Vec<String>) -> Result<Vec<Project
     let mut imported: Vec<Project> = Vec::new();
 
     for path in paths {
-        if projects.iter().any(|p| p.path == path) {
+        let canon = Path::new(&path).canonicalize().ok();
+        let canon_str = canon.as_ref().and_then(|p| p.to_str()).unwrap_or(&path).to_string();
+
+        if projects.iter().any(|p| p.path == canon_str) {
             continue;
         }
-        match build_project_from_path(&path) {
+        match build_project_from_path(&canon_str) {
             Ok(project) => {
                 imported.push(project.clone());
                 projects.push(project);
@@ -199,33 +206,18 @@ pub fn import_projects(app: AppHandle, paths: Vec<String>) -> Result<Vec<Project
     Ok(imported)
 }
 
-fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
-    use std::process::Command;
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(args)
-        .output()
-        .map_err(|e| format!("failed to execute git: {e}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(if stderr.is_empty() {
-            format!("git {:?} failed with status {}", args, output.status)
-        } else {
-            stderr
-        })
-    }
-}
-
 #[tauri::command]
-pub fn pull_project(path: String) -> Result<String, String> {
-    run_git(&path, &["pull"])
+pub fn pull_project(path: String, base_branch: Option<String>) -> Result<String, String> {
+    let base = match base_branch {
+        Some(b) if !b.trim().is_empty() => b.trim().to_string(),
+        _ => detect_base_branch(&path),
+    };
+    git_engine::run_git(&path, &["pull", "--rebase", "origin", &base])
 }
 
 #[tauri::command]
 pub fn push_project(path: String) -> Result<String, String> {
-    run_git(&path, &["push"])
+    git_engine::run_git(&path, &["push", "origin", "HEAD"])
 }
 
 #[tauri::command]
@@ -270,10 +262,8 @@ pub struct GitHubRepoInfo {
 
 #[tauri::command]
 pub fn get_github_repo_url(path: String) -> Result<GitHubRepoInfo, String> {
-    let output = run_git(&path, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let output = git_engine::run_git(&path, &["remote", "get-url", "origin"]).unwrap_or_default();
     let owner_repo = crate::gh_integration::parse_remote_url(&output);
     let url = owner_repo.as_ref().map(|r| format!("https://github.com/{}", r));
     Ok(GitHubRepoInfo { url, owner_repo })
 }
-
-

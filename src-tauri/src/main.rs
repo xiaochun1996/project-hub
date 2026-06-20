@@ -55,6 +55,8 @@ fn bump_launch_count(app: tauri::AppHandle) -> Result<u64, String> {
 
 #[tauri::command]
 fn get_project_status(path: String, base_branch: Option<String>) -> Result<ProjectStatus, String> {
+    let _ = crate::git_engine::run_git(&path, &["fetch", "origin"]);
+
     let resolved_base = match base_branch {
         Some(b) if !b.trim().is_empty() => b.trim().to_string(),
         _ => detect_base_branch(&path),

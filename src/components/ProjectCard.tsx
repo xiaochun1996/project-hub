@@ -81,7 +81,7 @@ function ProjectCard({
 
   const handlePull = async () => {
     try {
-      await ops.runSingle(project.id, "pull", () => pullProject(project.path));
+      await ops.runSingle(project.id, "pull", () => pullProject(project.path, project.base_branch ?? undefined));
       toast({ title: "Pull 完成", description: project.name });
       onRefresh();
     } catch (e) {

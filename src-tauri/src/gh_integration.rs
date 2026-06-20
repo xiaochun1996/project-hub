@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, Serialize)]
@@ -9,9 +10,76 @@ pub enum GhError {
     CommandFailed(String),
 }
 
+/// Build a PATH that includes common locations for CLI tools like `gh` and `git`.
+/// macOS GUI apps launched via Launchpad/Dock only get `/usr/bin:/bin:/usr/sbin:/sbin`,
+/// which misses Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`) and user-level installs.
+pub fn extended_path() -> String {
+    let mut parts: Vec<String> = vec![
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/sbin".into(),
+        "/usr/local/bin".into(),
+        "/usr/local/sbin".into(),
+    ];
+    if let Ok(path_var) = std::env::var("PATH") {
+        for p in path_var.split(':') {
+            if !parts.iter().any(|x| x == p) {
+                parts.push(p.to_string());
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let local_bin = format!("{}/.local/bin", home);
+        if !parts.iter().any(|x| *x == local_bin) {
+            parts.push(local_bin);
+        }
+    }
+    parts.join(":")
+}
+
+/// Resolve the absolute path of a CLI binary, checking common locations.
+fn resolve_binary(name: &str) -> Option<PathBuf> {
+    let candidates = [
+        format!("/opt/homebrew/bin/{}", name),
+        format!("/usr/local/bin/{}", name),
+    ];
+    // Also check ~/.local/bin
+    if let Ok(home) = std::env::var("HOME") {
+        let mut c = candidates.to_vec();
+        c.push(format!("{}/.local/bin/{}", home, name));
+        for path in c {
+            let p = PathBuf::from(&path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    } else {
+        for path in &candidates {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    // Fall back to PATH lookup (works in terminal-launched dev mode)
+    which_in_path(name)
+}
+
+fn which_in_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in path_var.split(':') {
+        let candidate = PathBuf::from(dir).join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 pub fn run_cmd(cmd: &str, args: &[&str]) -> Result<(String, String), GhError> {
-    let output = Command::new(cmd)
+    let binary = resolve_binary(cmd).unwrap_or_else(|| PathBuf::from(cmd));
+    let output = Command::new(&binary)
         .args(args)
+        .env("PATH", extended_path())
         .output()
         .map_err(|e| GhError::CommandFailed(e.to_string()))?;
 
@@ -30,18 +98,28 @@ pub fn run_cmd(cmd: &str, args: &[&str]) -> Result<(String, String), GhError> {
 }
 
 pub fn is_gh_installed() -> bool {
-    Command::new("gh")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
+    resolve_binary("gh")
+        .map(|bin| {
+            Command::new(&bin)
+                .arg("--version")
+                .env("PATH", extended_path())
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
         .unwrap_or(false)
 }
 
 pub fn is_gh_authenticated() -> bool {
-    Command::new("gh")
-        .args(["auth", "status"])
-        .output()
-        .map(|o| o.status.success())
+    resolve_binary("gh")
+        .map(|bin| {
+            Command::new(&bin)
+                .args(["auth", "status"])
+                .env("PATH", extended_path())
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
         .unwrap_or(false)
 }
 
