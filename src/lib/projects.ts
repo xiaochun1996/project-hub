@@ -62,6 +62,16 @@ export async function batchRefresh(): Promise<ProjectBatchStatus[]> {
   return await invoke<ProjectBatchStatus[]>("batch_refresh");
 }
 
+export async function refreshSingle(
+  path: string,
+  baseBranch?: string | null,
+): Promise<ProjectBatchStatus> {
+  return await invoke<ProjectBatchStatus>("refresh_single", {
+    path,
+    baseBranch: baseBranch ?? null,
+  });
+}
+
 export async function batchPull(): Promise<BatchPullResult> {
   return await invoke<BatchPullResult>("batch_pull");
 }

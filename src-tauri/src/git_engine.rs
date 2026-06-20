@@ -1,12 +1,19 @@
 use std::process::Command;
 
+use crate::gh_integration::{extended_path, proxy_env};
 use crate::models::{SyncStatus, WorkingState};
 
 pub fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .current_dir(path)
+    let mut cmd = Command::new("git");
+    cmd.current_dir(path)
         .args(args)
-        .env("PATH", crate::gh_integration::extended_path())
+        .env("PATH", extended_path());
+    if let Some(proxy) = proxy_env() {
+        cmd.env("http_proxy", proxy)
+            .env("https_proxy", proxy)
+            .env("all_proxy", proxy);
+    }
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to execute git: {e}"))?;
 

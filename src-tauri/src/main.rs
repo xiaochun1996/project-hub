@@ -55,7 +55,11 @@ fn bump_launch_count(app: tauri::AppHandle) -> Result<u64, String> {
 
 #[tauri::command]
 fn get_project_status(path: String, base_branch: Option<String>) -> Result<ProjectStatus, String> {
-    let _ = crate::git_engine::run_git(&path, &["fetch", "origin"]);
+    let _ = crate::git_engine::run_git(&path, &[
+        "-c", "http.lowSpeedLimit=1000",
+        "-c", "http.lowSpeedTime=10",
+        "fetch", "origin",
+    ]);
 
     let resolved_base = match base_branch {
         Some(b) if !b.trim().is_empty() => b.trim().to_string(),
@@ -104,10 +108,17 @@ fn main() {
             commands::git::batch_refresh,
             commands::git::batch_pull,
             commands::git::batch_push,
+            commands::git::refresh_single,
             commands::issues::list_issues,
             commands::issues::close_issue,
         ])
         .setup(|app| {
+            // Initialize proxy for Tauri GUI (doesn't inherit shell env vars).
+            gh_integration::init_proxy("socks5://127.0.0.1:7891");
+
+            // Pre-warm gh CLI availability cache in background.
+            commands::git::prewarm_gh_cache();
+
             let store = app
                 .store("settings.json")
                 .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to open store: {e}").into() })?;

@@ -1,6 +1,18 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// Global proxy URL for network operations. Initialized at app startup.
+static PROXY_URL: OnceLock<String> = OnceLock::new();
+
+pub fn init_proxy(url: &str) {
+    let _ = PROXY_URL.set(url.to_string());
+}
+
+pub fn proxy_env() -> Option<&'static str> {
+    PROXY_URL.get().map(|s| s.as_str())
+}
 
 #[derive(Debug, Serialize)]
 pub enum GhError {
@@ -77,10 +89,18 @@ fn which_in_path(name: &str) -> Option<PathBuf> {
 
 pub fn run_cmd(cmd: &str, args: &[&str]) -> Result<(String, String), GhError> {
     let binary = resolve_binary(cmd).unwrap_or_else(|| PathBuf::from(cmd));
-    let output = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    command
         .args(args)
         .env("PATH", extended_path())
-        .env("GH_PAGER", "cat")  // Disable pager for gh CLI
+        .env("GH_PAGER", "cat");  // Disable pager for gh CLI
+    if let Some(proxy) = proxy_env() {
+        command
+            .env("http_proxy", proxy)
+            .env("https_proxy", proxy)
+            .env("all_proxy", proxy);
+    }
+    let output = command
         .output()
         .map_err(|e| GhError::CommandFailed(e.to_string()))?;
 
@@ -101,10 +121,14 @@ pub fn run_cmd(cmd: &str, args: &[&str]) -> Result<(String, String), GhError> {
 pub fn is_gh_installed() -> bool {
     resolve_binary("gh")
         .map(|bin| {
-            Command::new(&bin)
-                .arg("--version")
-                .env("PATH", extended_path())
-                .output()
+            let mut cmd = Command::new(&bin);
+            cmd.arg("--version").env("PATH", extended_path());
+            if let Some(proxy) = proxy_env() {
+                cmd.env("http_proxy", proxy)
+                    .env("https_proxy", proxy)
+                    .env("all_proxy", proxy);
+            }
+            cmd.output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
         })
@@ -114,10 +138,14 @@ pub fn is_gh_installed() -> bool {
 pub fn is_gh_authenticated() -> bool {
     resolve_binary("gh")
         .map(|bin| {
-            Command::new(&bin)
-                .args(["auth", "status"])
-                .env("PATH", extended_path())
-                .output()
+            let mut cmd = Command::new(&bin);
+            cmd.args(["auth", "status"]).env("PATH", extended_path());
+            if let Some(proxy) = proxy_env() {
+                cmd.env("http_proxy", proxy)
+                    .env("https_proxy", proxy)
+                    .env("all_proxy", proxy);
+            }
+            cmd.output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
         })
@@ -161,6 +189,11 @@ pub fn get_open_issues_count_impl(path: &str) -> Result<u32, GhError> {
         return Err(GhError::GhNotAuthenticated);
     }
 
+    get_open_issues_count_no_check(path)
+}
+
+/// Skip gh availability checks (caller has already verified).
+pub fn get_open_issues_count_no_check(path: &str) -> Result<u32, GhError> {
     let (remote_url, _) =
         run_cmd("git", &["-C", path, "remote", "get-url", "origin"]).map_err(|_| GhError::NotGitHubRepo)?;
 

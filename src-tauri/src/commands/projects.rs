@@ -212,12 +212,20 @@ pub fn pull_project(path: String, base_branch: Option<String>) -> Result<String,
         Some(b) if !b.trim().is_empty() => b.trim().to_string(),
         _ => detect_base_branch(&path),
     };
-    git_engine::run_git(&path, &["pull", "--rebase", "origin", &base])
+    git_engine::run_git(&path, &[
+        "-c", "http.lowSpeedLimit=1000",
+        "-c", "http.lowSpeedTime=10",
+        "pull", "--rebase", "origin", &base,
+    ])
 }
 
 #[tauri::command]
 pub fn push_project(path: String) -> Result<String, String> {
-    git_engine::run_git(&path, &["push", "origin", "HEAD"])
+    git_engine::run_git(&path, &[
+        "-c", "http.lowSpeedLimit=1000",
+        "-c", "http.lowSpeedTime=10",
+        "push", "origin", "HEAD",
+    ])
 }
 
 #[tauri::command]

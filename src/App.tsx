@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,6 +17,7 @@ import {
   batchPull,
   batchPush,
   batchRefresh,
+  refreshSingle,
   Project,
 } from "@/lib/projects";
 import { buildBatchSummary, formatInvokeError } from "@/lib/operations";
@@ -33,6 +34,7 @@ function ProjectListHome() {
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const batchRefreshInFlight = useRef(false);
 
   const ops = useOperations();
   const actions = useOperationActions();
@@ -40,6 +42,10 @@ function ProjectListHome() {
   const pullingAll = ops.globalLoading.pull;
 
   const loadProjects = useCallback(async () => {
+    // Prevent concurrent batch_refresh calls (React strict mode / double-mount).
+    if (batchRefreshInFlight.current) return;
+    batchRefreshInFlight.current = true;
+
     actions.setGlobal("refresh", true);
     try {
       const { listProjects } = await import("@/lib/projects");
@@ -74,12 +80,32 @@ function ProjectListHome() {
     } finally {
       setLoaded(true);
       actions.setGlobal("refresh", false);
+      batchRefreshInFlight.current = false;
     }
   }, [actions]);
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  const handleRefreshSingle = useCallback(async (path: string, baseBranch: string | null) => {
+    try {
+      const result = await refreshSingle(path, baseBranch);
+      setStatusMap((prev) => ({ ...prev, [result.id]: result.status ?? null }));
+      setIssuesMap((prev) => ({
+        ...prev,
+        [result.id]: result.open_issues != null
+          ? { status: "ok", count: result.open_issues }
+          : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } },
+      }));
+    } catch (e) {
+      toast({
+        title: "刷新失败",
+        description: formatInvokeError(e),
+        variant: "destructive",
+      });
+    }
+  }, []);
 
   const handleRefreshAll = async () => {
     ops.setGlobal("refresh", true);
@@ -289,7 +315,7 @@ function ProjectListHome() {
                 project={p}
                 status={statusMap[p.id] ?? null}
                 issues={issuesMap[p.id] ?? null}
-                onRefresh={loadProjects}
+                onRefresh={() => handleRefreshSingle(p.path, p.base_branch)}
                 onRemoved={loadProjects}
               />
             ))}
