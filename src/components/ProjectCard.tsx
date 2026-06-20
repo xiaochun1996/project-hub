@@ -30,6 +30,7 @@ import { formatInvokeError } from "@/lib/operations";
 import type { ProjectStatus } from "@/lib/git";
 import type { OpenIssuesResult } from "@/lib/gh";
 import { ghDisplayLabel } from "@/lib/gh";
+import IssuesDialog from "@/components/IssuesDialog";
 
 interface ProjectCardProps {
   project: Project;
@@ -62,6 +63,7 @@ function ProjectCard({
   const [baseBranch, setBaseBranch] = useState<string>(project.base_branch ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
+  const [issuesDialogOpen, setIssuesDialogOpen] = useState(false);
   const [githubUrl, setGithubUrl] = useState<string | null>(null);
   const [ghLoading, setGhLoading] = useState(false);
   const ops = useOperations();
@@ -124,17 +126,22 @@ function ProjectCard({
     setGhLoading(true);
     try {
       const info = await getGitHubRepoUrl(project.path);
+      console.log("[ensureGithubUrl] backend response:", info);
       if (info.url) {
         setGithubUrl(info.url);
         return info.url;
       }
+      console.error("[ensureGithubUrl] No GitHub URL found for project:", project.path, "owner_repo:", info.owner_repo);
       toast({
         title: "非 GitHub 仓库",
-        description: "未检测到 GitHub origin",
+        description: info.owner_repo
+          ? `检测到 owner/repo: ${info.owner_repo}，但无法构建 URL`
+          : "未检测到 GitHub origin",
         variant: "destructive",
       });
       return null;
     } catch (e) {
+      console.error("[ensureGithubUrl] Error fetching GitHub info for:", project.path, e);
       toast({
         title: "获取 GitHub 信息失败",
         description: formatInvokeError(e),
@@ -151,9 +158,8 @@ function ProjectCard({
     if (url) window.open(url, "_blank");
   };
 
-  const handleOpenIssues = async () => {
-    const url = await ensureGithubUrl();
-    if (url) window.open(`${url}/issues`, "_blank");
+  const handleOpenIssues = () => {
+    setIssuesDialogOpen(true);
   };
 
   const handleSaveBaseBranch = async () => {
@@ -324,12 +330,18 @@ function ProjectCard({
             size="sm"
             variant="outline"
             onClick={handleOpenIssues}
-            disabled={disabled || ghLoading}
+            disabled={disabled}
           >
             Issues
           </Button>
         </div>
       </CardContent>
+
+      <IssuesDialog
+        project={project}
+        open={issuesDialogOpen}
+        onOpenChange={setIssuesDialogOpen}
+      />
 
       <Dialog open={removeConfirmOpen} onOpenChange={setRemoveConfirmOpen}>
         <DialogContent>
