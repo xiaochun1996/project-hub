@@ -80,6 +80,7 @@ pub fn run_cmd(cmd: &str, args: &[&str]) -> Result<(String, String), GhError> {
     let output = Command::new(&binary)
         .args(args)
         .env("PATH", extended_path())
+        .env("GH_PAGER", "cat")  // Disable pager for gh CLI
         .output()
         .map_err(|e| GhError::CommandFailed(e.to_string()))?;
 
