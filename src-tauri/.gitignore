@@ -4,3 +4,11 @@ Cargo.lock
 
 # Tauri generated
 gen/
+
+# Tauri icon tool extras (mobile/store)
+icons/64x64.png
+icons/icon.png
+icons/Square*.png
+icons/StoreLogo.png
+icons/android/
+icons/ios/

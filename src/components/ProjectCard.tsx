@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -196,6 +197,21 @@ function ProjectCard({
 
   const issuesText = issues ? ghDisplayLabel(issues) : "…";
 
+  const hasOpenIssues = issues?.status === "ok" && (issues.count ?? 0) > 0;
+  const isDirty = status?.working_state === "dirty";
+  const hasAhead = status ? status.ahead > 0 : false;
+  const hasBehind = status ? status.behind > 0 : false;
+
+  const cellBase = "space-y-1 rounded-md border px-3 py-2";
+  const cellMuted = "bg-muted/30";
+  const cellAmber = "bg-amber-50 border-amber-200";
+  const cellBlue = "bg-blue-50 border-blue-200";
+
+  const issuesCls = hasOpenIssues ? cellAmber : cellMuted;
+  const workingCls = isDirty ? cellAmber : cellMuted;
+  const aheadCls = hasAhead ? cellBlue : cellMuted;
+  const behindCls = hasBehind ? cellAmber : cellMuted;
+
   const borderCls = projectOps.lastError
     ? "border-destructive shadow-[0_0_0_1px_rgba(220,38,38,0.3)]"
     : projectOps.running
@@ -285,26 +301,36 @@ function ProjectCard({
       </CardHeader>
       <CardContent className="space-y-4 pt-0">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
+          <div className={`${cellBase} ${issuesCls}`}>
             <div className="text-xs text-muted-foreground">Open Issues</div>
             <div className="text-sm font-semibold">{issuesText}</div>
           </div>
-          <div className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
+          <div className={`${cellBase} ${workingCls}`}>
             <div className="text-xs text-muted-foreground">Working</div>
             <div className="text-sm font-semibold">
               {status ? (status.working_state === "dirty" ? "Dirty" : "Clean") : "—"}
             </div>
           </div>
-          <div className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
+          <div className={`${cellBase} ${aheadCls}`}>
             <div className="text-xs text-muted-foreground">Ahead</div>
             <div className="text-sm font-semibold">{status ? status.ahead : "—"}</div>
           </div>
-          <div className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
+          <div className={`${cellBase} ${behindCls}`}>
             <div className="text-xs text-muted-foreground">Behind</div>
             <div className="text-sm font-semibold">{status ? status.behind : "—"}</div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onRefresh()}
+            disabled={disabled}
+            title="Refresh"
+            className="px-2"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </Button>
           {showPull && (
             <Button size="sm" onClick={handlePull} disabled={disabled}>
               {projectOps.running && projectOps.currentOp === "pull" ? "Pulling…" : "Pull"}
