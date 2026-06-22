@@ -71,7 +71,7 @@ function IssuesDialog({ project, open, onOpenChange }: IssuesDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-h-[80vh] w-[640px] max-w-[90vw] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Issues — {project.name}</DialogTitle>
         </DialogHeader>

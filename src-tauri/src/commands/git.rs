@@ -7,7 +7,7 @@ use tauri_plugin_store::StoreExt;
 use tokio::sync::Semaphore;
 
 use crate::git_engine::{self, compute_ahead_behind, compute_working_state, derive_sync_status, detect_base_branch};
-use crate::models::{Project, ProjectStatus, SyncStatus, WorkingState};
+use crate::models::{AheadBehindCommits, CommitInfo, DirtyFile, Project, ProjectStatus, SyncStatus, WorkingState};
 
 const STORE_FILE: &str = "projects.json";
 const STORE_KEY: &str = "projects";
@@ -481,6 +481,75 @@ pub async fn refresh_single(app: AppHandle, path: String, base_branch: Option<St
         status: result.status,
         open_issues: result.open_issues,
     }
+}
+
+// ── Detail query commands ──
+
+/// Returns the list of dirty (modified/untracked) files in the working tree.
+#[tauri::command]
+pub fn get_dirty_files(path: String) -> Result<Vec<DirtyFile>, String> {
+    let output = git_engine::run_git(&path, &["status", "--porcelain"])?;
+    let files: Vec<DirtyFile> = output
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            // `git status --porcelain` format: "XY filename"
+            // First two chars are status, then a space, then the path.
+            let (status, file_path) = if line.len() >= 3 {
+                (line[..2].to_string(), line[3..].to_string())
+            } else {
+                ("??".to_string(), line.to_string())
+            };
+            DirtyFile { status, path: file_path }
+        })
+        .collect();
+    Ok(files)
+}
+
+/// Returns ahead/behind commit lists relative to origin/<base_branch>.
+#[tauri::command]
+pub fn get_ahead_behind_commits(
+    path: String,
+    base_branch: Option<String>,
+) -> Result<AheadBehindCommits, String> {
+    let resolved_base = match base_branch {
+        Some(b) if !b.trim().is_empty() => b.trim().to_string(),
+        _ => detect_base_branch(&path),
+    };
+    let remote_ref = format!("origin/{}", resolved_base);
+
+    // Ahead commits: local commits not in remote (HEAD is ahead)
+    let ahead_range = format!("{}..HEAD", remote_ref);
+    let ahead_output = git_engine::run_git(
+        &path,
+        &["log", "--oneline", "--no-decorate", &ahead_range],
+    )
+    .unwrap_or_default();
+    let ahead = parse_oneline_log(&ahead_output);
+
+    // Behind commits: remote commits not in local (remote is ahead)
+    let behind_range = format!("HEAD..{}", remote_ref);
+    let behind_output = git_engine::run_git(
+        &path,
+        &["log", "--oneline", "--no-decorate", &behind_range],
+    )
+    .unwrap_or_default();
+    let behind = parse_oneline_log(&behind_output);
+
+    Ok(AheadBehindCommits { ahead, behind })
+}
+
+fn parse_oneline_log(output: &str) -> Vec<CommitInfo> {
+    output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let mut parts = line.splitn(2, ' ');
+            let hash = parts.next().unwrap_or("").to_string();
+            let message = parts.next().unwrap_or("").to_string();
+            CommitInfo { hash, message }
+        })
+        .collect()
 }
 
 #[tauri::command]

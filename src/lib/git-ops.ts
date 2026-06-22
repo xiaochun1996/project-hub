@@ -13,6 +13,22 @@ export interface PushResult {
   message: string;
 }
 
+export interface DirtyFile {
+  /** Two-char status code, e.g. "M ", "A ", "??". */
+  status: string;
+  path: string;
+}
+
+export interface CommitInfo {
+  hash: string;
+  message: string;
+}
+
+export interface AheadBehindCommits {
+  ahead: CommitInfo[];
+  behind: CommitInfo[];
+}
+
 export interface ProjectStatus {
   working_state: "clean" | "dirty";
   ahead: number;
@@ -65,5 +81,19 @@ export async function batchPush(
 ): Promise<Array<[string, PushResult]>> {
   return await invoke<Array<[string, PushResult]>>("batch_push", {
     project_ids,
+  });
+}
+
+export async function getDirtyFiles(path: string): Promise<DirtyFile[]> {
+  return await invoke<DirtyFile[]>("get_dirty_files", { path });
+}
+
+export async function getAheadBehindCommits(
+  path: string,
+  base_branch?: string | null,
+): Promise<AheadBehindCommits> {
+  return await invoke<AheadBehindCommits>("get_ahead_behind_commits", {
+    path,
+    base_branch: base_branch ?? null,
   });
 }
