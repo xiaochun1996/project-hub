@@ -20,17 +20,22 @@ pub fn detect_project_commands(project_path: String) -> Result<Vec<CustomCommand
             if let Ok(package) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(scripts) = package.get("scripts").and_then(|v| v.as_object()) {
                     let mut sort_order = 0;
-                    for (name, command) in scripts {
-                        if let Some(cmd) = command.as_str() {
-                            commands.push(CustomCommand {
-                                name: name.clone(),
-                                command: cmd.to_string(),
-                                source: "auto".to_string(),
-                                sort_order,
-                                hidden: None,
-                            });
-                            sort_order += 1;
+                    for (name, _command) in scripts {
+                        // 跳过 npm 生命周期脚本（pre/post 开头或特殊生命周期事件）
+                        let is_lifecycle = name.starts_with("pre") || name.starts_with("post")
+                            || matches!(name.as_str(), "prepare" | "prepublishOnly" | "prepack" | "postpack" | "preversion" | "version" | "postversion");
+                        if is_lifecycle {
+                            continue;
                         }
+                        commands.push(CustomCommand {
+                            name: name.clone(),
+                            // 使用 npm run <name> 确保 node_modules/.bin 在 PATH 中
+                            command: format!("npm run {}", name),
+                            source: "auto".to_string(),
+                            sort_order,
+                            hidden: None,
+                        });
+                        sort_order += 1;
                     }
                 }
             }

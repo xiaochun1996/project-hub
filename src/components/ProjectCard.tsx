@@ -171,7 +171,7 @@ function ProjectCard({
     }
   };
 
-  const handleProjectNameClick = () => {
+  const handleNavigateToDetail = () => {
     navigate(`/project/${project.id}`);
   };
 
@@ -200,15 +200,17 @@ function ProjectCard({
       : "";
 
   return (
-    <Card className={`overflow-hidden transition-colors hover:border-foreground/20 ${borderCls}`}>
+    <Card
+      className={`overflow-hidden transition-colors hover:border-foreground/20 ${borderCls} cursor-pointer`}
+      onClick={handleNavigateToDetail}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => e.key === "Enter" && handleNavigateToDetail()}
+    >
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3
-              className="truncate text-lg font-semibold tracking-tight cursor-pointer hover:text-primary transition-colors"
-              onClick={handleProjectNameClick}
-              title="查看详情"
-            >
+            <h3 className="truncate text-lg font-semibold tracking-tight">
               {project.name}
             </h3>
             {projectOps.running && (
@@ -250,6 +252,7 @@ function ProjectCard({
               size="sm"
               className="shrink-0 px-2 text-lg leading-none"
               disabled={disabled}
+              onClick={(e) => e.stopPropagation()}
             >
               ⋯
             </Button>
@@ -288,7 +291,7 @@ function ProjectCard({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div
             className={`${cellBase} ${issuesCls} ${cellClickable}`}
-            onClick={handleOpenIssues}
+            onClick={(e) => { e.stopPropagation(); handleOpenIssues(); }}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => e.key === "Enter" && handleOpenIssues()}
@@ -298,7 +301,7 @@ function ProjectCard({
           </div>
           <div
             className={`${cellBase} ${workingCls} ${isDirty ? cellClickable : ""}`}
-            onClick={isDirty ? handleOpenDirty : undefined}
+            onClick={isDirty ? (e) => { e.stopPropagation(); handleOpenDirty(); } : undefined}
             role={isDirty ? "button" : undefined}
             tabIndex={isDirty ? 0 : undefined}
             onKeyDown={isDirty ? (e) => e.key === "Enter" && handleOpenDirty() : undefined}
@@ -310,7 +313,7 @@ function ProjectCard({
           </div>
           <div
             className={`${cellBase} ${aheadCls} ${hasAhead ? cellClickable : ""}`}
-            onClick={hasAhead ? () => handleOpenCommits("ahead") : undefined}
+            onClick={hasAhead ? (e) => { e.stopPropagation(); handleOpenCommits("ahead"); } : undefined}
             role={hasAhead ? "button" : undefined}
             tabIndex={hasAhead ? 0 : undefined}
             onKeyDown={hasAhead ? (e) => e.key === "Enter" && handleOpenCommits("ahead") : undefined}
@@ -320,7 +323,7 @@ function ProjectCard({
           </div>
           <div
             className={`${cellBase} ${behindCls} ${hasBehind ? cellClickable : ""}`}
-            onClick={hasBehind ? () => handleOpenCommits("behind") : undefined}
+            onClick={hasBehind ? (e) => { e.stopPropagation(); handleOpenCommits("behind"); } : undefined}
             role={hasBehind ? "button" : undefined}
             tabIndex={hasBehind ? 0 : undefined}
             onKeyDown={hasBehind ? (e) => e.key === "Enter" && handleOpenCommits("behind") : undefined}
@@ -333,7 +336,7 @@ function ProjectCard({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => onRefresh()}
+            onClick={(e) => { e.stopPropagation(); onRefresh(); }}
             disabled={disabled}
             title="Refresh"
             className="px-2"
@@ -341,16 +344,16 @@ function ProjectCard({
             <RefreshCw className="h-4 w-4" />
           </Button>
           {showPull && (
-            <Button size="sm" onClick={handlePull} disabled={disabled}>
+            <Button size="sm" onClick={(e) => { e.stopPropagation(); handlePull(); }} disabled={disabled}>
               {projectOps.running && projectOps.currentOp === "pull" ? "Pulling…" : "Pull"}
             </Button>
           )}
           {showPush && (
-            <Button size="sm" variant="secondary" onClick={handlePush} disabled={disabled}>
+            <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); handlePush(); }} disabled={disabled}>
               {projectOps.running && projectOps.currentOp === "push" ? "Pushing…" : "Push"}
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={handleOpenFinder} disabled={disabled}>
+          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleOpenFinder(); }} disabled={disabled}>
             Finder
           </Button>
         </div>
