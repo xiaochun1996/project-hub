@@ -15,6 +15,7 @@ import { OperationProvider, useOperations, useOperationActions } from "@/compone
 import ProjectCard from "@/components/ProjectCard";
 import AddProjectDialog from "@/components/AddProjectDialog";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
+import SettingsDialog from "@/components/SettingsDialog";
 import {
   batchPull,
   batchPush,
@@ -284,6 +285,7 @@ function ProjectListHome() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <SettingsDialog />
             <Button variant="outline" onClick={handleRefreshAll} disabled={refreshing}>
               {refreshing ? "刷新中…" : "Refresh All"}
             </Button>

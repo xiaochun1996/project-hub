@@ -77,29 +77,89 @@ pub fn detect_project_commands(project_path: String) -> Result<Vec<CustomCommand
     Ok(commands)
 }
 
-/// 在 Terminal.app 中执行命令（通过 AppleScript）
+/// 执行命令，支持多终端
+/// terminal_type: "terminal_app" | "iterm2"，如果为 None 则默认使用 Terminal.app
 #[tauri::command]
-pub fn run_in_terminal(project_path: String, command: String) -> Result<(), String> {
+pub fn run_in_terminal(
+    project_path: String,
+    command: String,
+    terminal_type: Option<String>,
+) -> Result<(), String> {
     // 将 cd 和命令合并为一条 shell 命令
-    let full_command = format!("cd {} && {}", 
-        shell_escape(&project_path), 
+    let full_command = format!(
+        "cd {} && {}",
+        shell_escape(&project_path),
         command
     );
 
-    // 使用 AppleScript 在 Terminal.app 中执行命令
-    // 每次点击都会打开一个新的 Terminal 窗口
+    let use_iterm2 = terminal_type
+        .as_deref()
+        .map(|t| t == "iterm2")
+        .unwrap_or(false);
+
+    if use_iterm2 {
+        run_in_iterm2(&full_command)
+    } else {
+        run_in_terminal_app(&full_command)
+    }
+}
+
+/// 在 Terminal.app 中执行命令（通过 AppleScript）
+fn run_in_terminal_app(full_command: &str) -> Result<(), String> {
     let script = format!(
         r#"tell application "Terminal"
     do script "{}"
     activate
 end tell"#,
-        escape_applescript_string(&full_command)
+        escape_applescript_string(full_command)
     );
 
+    run_osascript(&script)
+}
+
+/// 在 iTerm2 中执行命令（通过 AppleScript）
+fn run_in_iterm2(full_command: &str) -> Result<(), String> {
+    // 先检测 iTerm2 是否已安装
+    if !is_iterm2_installed() {
+        return Err(
+            "iTerm2 未安装，请先安装或切换到 Terminal.app".to_string()
+        );
+    }
+
+    let script = format!(
+        r#"tell application "iTerm"
+    activate
+    try
+        tell current window to create tab with default profile
+    on error
+        create window with default profile
+    end try
+    tell current session of current window
+        write text "{}"
+    end tell
+end tell"#,
+        escape_applescript_string(full_command)
+    );
+
+    run_osascript(&script)
+}
+
+/// 检测 iTerm2 是否已安装
+fn is_iterm2_installed() -> bool {
+    use std::process::Command;
+    Command::new("osascript")
+        .args(&["-e", r#"id of application "iTerm""#])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// 执行 AppleScript
+fn run_osascript(script: &str) -> Result<(), String> {
     use std::process::Command;
     let output = Command::new("osascript")
         .arg("-e")
-        .arg(&script)
+        .arg(script)
         .output()
         .map_err(|e| format!("failed to execute osascript: {}", e))?;
 

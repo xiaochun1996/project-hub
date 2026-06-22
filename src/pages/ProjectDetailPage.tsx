@@ -14,6 +14,7 @@ import { formatInvokeError } from "@/lib/operations";
 import {
   CustomCommand,
   detectProjectCommands,
+  getGlobalSettings,
   listProjects,
   Project,
   runInTerminal,
@@ -33,6 +34,7 @@ function ProjectDetailPage({ onBack }: ProjectDetailPageProps) {
   const [showAddCommand, setShowAddCommand] = useState(false);
   const [newCmdName, setNewCmdName] = useState("");
   const [newCmdCommand, setNewCmdCommand] = useState("");
+  const [terminalPreference, setTerminalPreference] = useState<string>("terminal_app");
 
   useEffect(() => {
     loadProject();
@@ -58,6 +60,15 @@ function ProjectDetailPage({ onBack }: ProjectDetailPageProps) {
       // 加载自动探测的命令
       const detected = await detectProjectCommands(p.path);
       setAutoCommands(detected);
+
+      // 加载全局设置中的终端偏好
+      try {
+        const settings = await getGlobalSettings();
+        setTerminalPreference(settings.terminal_preference ?? "terminal_app");
+      } catch {
+        // 默认使用 Terminal.app
+        setTerminalPreference("terminal_app");
+      }
     } catch (e) {
       toast({
         title: "加载失败",
@@ -78,7 +89,7 @@ function ProjectDetailPage({ onBack }: ProjectDetailPageProps) {
     if (!project) return;
     setRunning(command.name);
     try {
-      await runInTerminal(project.path, command.command);
+      await runInTerminal(project.path, command.command, terminalPreference);
       toast({
         title: "已启动",
         description: `已在终端中执行: ${command.name}`,
@@ -197,7 +208,15 @@ function ProjectDetailPage({ onBack }: ProjectDetailPageProps) {
               </p>
             </div>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
+            <>
+              <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                <span>将使用</span>
+                <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs">
+                  {terminalPreference === "iterm2" ? "iTerm2" : "Terminal.app"}
+                </span>
+                <span>执行命令</span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
               {allCommands.map((cmd, idx) => (
                 <div
                   key={`${cmd.name}-${idx}`}
@@ -238,6 +257,7 @@ function ProjectDetailPage({ onBack }: ProjectDetailPageProps) {
                 </div>
               ))}
             </div>
+            </>
           )}
 
           {/* Add Command Form */}

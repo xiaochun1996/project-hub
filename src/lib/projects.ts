@@ -23,6 +23,10 @@ export interface ProjectConfig {
   custom_commands?: CustomCommand[] | null;
 }
 
+export interface GlobalSettings {
+  terminal_preference?: "terminal_app" | "iterm2";
+}
+
 export async function listProjects(): Promise<Project[]> {
   return await invoke<Project[]>("list_projects");
 }
@@ -115,6 +119,24 @@ export async function detectProjectCommands(projectPath: string): Promise<Custom
   return await invoke<CustomCommand[]>("detect_project_commands", { projectPath });
 }
 
-export async function runInTerminal(projectPath: string, command: string): Promise<void> {
-  return await invoke<void>("run_in_terminal", { projectPath, command });
+export async function runInTerminal(
+  projectPath: string,
+  command: string,
+  terminalType?: string,
+): Promise<void> {
+  return await invoke<void>("run_in_terminal", {
+    projectPath,
+    command,
+    terminalType: terminalType ?? null,
+  });
+}
+
+export async function getGlobalSettings(): Promise<GlobalSettings> {
+  return await invoke<GlobalSettings>("get_global_settings");
+}
+
+export async function updateGlobalSettings(
+  settings: GlobalSettings,
+): Promise<GlobalSettings> {
+  return await invoke<GlobalSettings>("update_global_settings", { settings });
 }

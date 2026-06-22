@@ -115,6 +115,8 @@ fn main() {
             commands::issues::close_issue,
             commands::project_run::detect_project_commands,
             commands::project_run::run_in_terminal,
+            commands::settings::get_global_settings,
+            commands::settings::update_global_settings,
         ])
         .setup(|app| {
             // Initialize proxy for Tauri GUI (doesn't inherit shell env vars).
