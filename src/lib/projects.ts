@@ -6,11 +6,21 @@ export interface Project {
   path: string;
   base_branch: string | null;
   added_at: string;
+  custom_commands?: CustomCommand[] | null;
+}
+
+export interface CustomCommand {
+  name: string;
+  command: string;
+  source: "auto" | "manual";
+  sort_order: number;
+  hidden?: boolean;
 }
 
 export interface ProjectConfig {
   base_branch?: string | null;
   name?: string | null;
+  custom_commands?: CustomCommand[] | null;
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -99,4 +109,12 @@ export interface GitHubRepoInfo {
 
 export async function getGitHubRepoUrl(path: string): Promise<GitHubRepoInfo> {
   return await invoke<GitHubRepoInfo>("get_github_repo_url", { path });
+}
+
+export async function detectProjectCommands(projectPath: string): Promise<CustomCommand[]> {
+  return await invoke<CustomCommand[]>("detect_project_commands", { projectPath });
+}
+
+export async function runInTerminal(projectPath: string, command: string): Promise<void> {
+  return await invoke<void>("run_in_terminal", { projectPath, command });
 }

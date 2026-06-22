@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,6 +14,7 @@ import { toast } from "@/hooks/use-toast";
 import { OperationProvider, useOperations, useOperationActions } from "@/components/OperationContext";
 import ProjectCard from "@/components/ProjectCard";
 import AddProjectDialog from "@/components/AddProjectDialog";
+import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import {
   batchPull,
   batchPush,
@@ -389,10 +391,20 @@ function ProjectListHome() {
 
 function App() {
   return (
-    <OperationProvider>
-      <ProjectListHome />
-    </OperationProvider>
+    <BrowserRouter>
+      <OperationProvider>
+        <Routes>
+          <Route path="/" element={<ProjectListHome />} />
+          <Route path="/project/:id" element={<ProjectDetailWrapper />} />
+        </Routes>
+      </OperationProvider>
+    </BrowserRouter>
   );
+}
+
+function ProjectDetailWrapper() {
+  const navigate = useNavigate();
+  return <ProjectDetailPage onBack={() => navigate("/")} />;
 }
 
 export default App;

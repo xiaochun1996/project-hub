@@ -79,6 +79,7 @@ fn build_project_from_path(path_str: &str) -> Result<Project, String> {
         path: absolute_str,
         base_branch: None,
         added_at: Utc::now().to_rfc3339(),
+        custom_commands: None,
     })
 }
 
@@ -138,6 +139,13 @@ pub fn update_project(
         if !name.trim().is_empty() {
             project.name = name;
         }
+    }
+    if let Some(custom_commands) = config.custom_commands {
+        project.custom_commands = if custom_commands.is_empty() {
+            None
+        } else {
+            Some(custom_commands)
+        };
     }
 
     let updated = project.clone();

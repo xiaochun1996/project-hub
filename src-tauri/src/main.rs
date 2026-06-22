@@ -109,8 +109,12 @@ fn main() {
             commands::git::batch_pull,
             commands::git::batch_push,
             commands::git::refresh_single,
+            commands::git::get_dirty_files,
+            commands::git::get_ahead_behind_commits,
             commands::issues::list_issues,
             commands::issues::close_issue,
+            commands::project_run::detect_project_commands,
+            commands::project_run::run_in_terminal,
         ])
         .setup(|app| {
             // Initialize proxy for Tauri GUI (doesn't inherit shell env vars).

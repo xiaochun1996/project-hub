@@ -1,18 +1,29 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomCommand {
+    pub name: String,
+    pub command: String,
+    pub source: String, // "auto" | "manual"
+    pub sort_order: i32,
+    pub hidden: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
     pub base_branch: Option<String>,
     pub added_at: String,
+    pub custom_commands: Option<Vec<CustomCommand>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub base_branch: Option<String>,
     pub name: Option<String>,
+    pub custom_commands: Option<Vec<CustomCommand>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,4 +57,23 @@ pub struct IssueInfo {
     pub title: String,
     pub created_at: String,
     pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirtyFile {
+    /// Two-char status code from `git status --porcelain`, e.g. "M ", "A ", "??".
+    pub status: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitInfo {
+    pub hash: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AheadBehindCommits {
+    pub ahead: Vec<CommitInfo>,
+    pub behind: Vec<CommitInfo>,
 }

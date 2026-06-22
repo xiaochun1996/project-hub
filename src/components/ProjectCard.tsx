@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,6 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { useOperations } from "@/components/OperationContext";
 import {
-  getGitHubRepoUrl,
   openInFinder,
   Project,
   pullProject,
@@ -32,6 +32,8 @@ import type { ProjectStatus } from "@/lib/git";
 import type { OpenIssuesResult } from "@/lib/gh";
 import { ghDisplayLabel } from "@/lib/gh";
 import IssuesDialog from "@/components/IssuesDialog";
+import DirtyFilesDialog from "@/components/DirtyFilesDialog";
+import CommitsDialog, { type CommitsDialogMode } from "@/components/CommitsDialog";
 
 interface ProjectCardProps {
   project: Project;
@@ -61,12 +63,14 @@ function ProjectCard({
   onRefresh,
   onRemoved,
 }: ProjectCardProps) {
+  const navigate = useNavigate();
   const [baseBranch, setBaseBranch] = useState<string>(project.base_branch ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
   const [issuesDialogOpen, setIssuesDialogOpen] = useState(false);
-  const [githubUrl, setGithubUrl] = useState<string | null>(null);
-  const [ghLoading, setGhLoading] = useState(false);
+  const [dirtyDialogOpen, setDirtyDialogOpen] = useState(false);
+  const [commitsDialogOpen, setCommitsDialogOpen] = useState(false);
+  const [commitsMode, setCommitsMode] = useState<CommitsDialogMode>("ahead");
   const ops = useOperations();
   const projectOps = ops.state(project.id);
 
@@ -122,45 +126,17 @@ function ProjectCard({
     }
   };
 
-  const ensureGithubUrl = async (): Promise<string | null> => {
-    if (githubUrl) return githubUrl;
-    setGhLoading(true);
-    try {
-      const info = await getGitHubRepoUrl(project.path);
-      console.log("[ensureGithubUrl] backend response:", info);
-      if (info.url) {
-        setGithubUrl(info.url);
-        return info.url;
-      }
-      console.error("[ensureGithubUrl] No GitHub URL found for project:", project.path, "owner_repo:", info.owner_repo);
-      toast({
-        title: "非 GitHub 仓库",
-        description: info.owner_repo
-          ? `检测到 owner/repo: ${info.owner_repo}，但无法构建 URL`
-          : "未检测到 GitHub origin",
-        variant: "destructive",
-      });
-      return null;
-    } catch (e) {
-      console.error("[ensureGithubUrl] Error fetching GitHub info for:", project.path, e);
-      toast({
-        title: "获取 GitHub 信息失败",
-        description: formatInvokeError(e),
-        variant: "destructive",
-      });
-      return null;
-    } finally {
-      setGhLoading(false);
-    }
-  };
-
-  const handleOpenGithub = async () => {
-    const url = await ensureGithubUrl();
-    if (url) window.open(url, "_blank");
-  };
-
   const handleOpenIssues = () => {
     setIssuesDialogOpen(true);
+  };
+
+  const handleOpenDirty = () => {
+    setDirtyDialogOpen(true);
+  };
+
+  const handleOpenCommits = (mode: CommitsDialogMode) => {
+    setCommitsMode(mode);
+    setCommitsDialogOpen(true);
   };
 
   const handleSaveBaseBranch = async () => {
@@ -195,6 +171,10 @@ function ProjectCard({
     }
   };
 
+  const handleProjectNameClick = () => {
+    navigate(`/project/${project.id}`);
+  };
+
   const issuesText = issues ? ghDisplayLabel(issues) : "…";
 
   const hasOpenIssues = issues?.status === "ok" && (issues.count ?? 0) > 0;
@@ -202,10 +182,11 @@ function ProjectCard({
   const hasAhead = status ? status.ahead > 0 : false;
   const hasBehind = status ? status.behind > 0 : false;
 
-  const cellBase = "space-y-1 rounded-md border px-3 py-2";
+  const cellBase = "space-y-1 rounded-md border px-3 py-2 transition-colors";
   const cellMuted = "bg-muted/30";
   const cellAmber = "bg-amber-50 border-amber-200";
   const cellBlue = "bg-blue-50 border-blue-200";
+  const cellClickable = "cursor-pointer hover:brightness-95 active:brightness-90";
 
   const issuesCls = hasOpenIssues ? cellAmber : cellMuted;
   const workingCls = isDirty ? cellAmber : cellMuted;
@@ -223,7 +204,11 @@ function ProjectCard({
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-lg font-semibold tracking-tight">
+            <h3
+              className="truncate text-lg font-semibold tracking-tight cursor-pointer hover:text-primary transition-colors"
+              onClick={handleProjectNameClick}
+              title="查看详情"
+            >
               {project.name}
             </h3>
             {projectOps.running && (
@@ -301,21 +286,45 @@ function ProjectCard({
       </CardHeader>
       <CardContent className="space-y-4 pt-0">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className={`${cellBase} ${issuesCls}`}>
+          <div
+            className={`${cellBase} ${issuesCls} ${cellClickable}`}
+            onClick={handleOpenIssues}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === "Enter" && handleOpenIssues()}
+          >
             <div className="text-xs text-muted-foreground">Open Issues</div>
             <div className="text-sm font-semibold">{issuesText}</div>
           </div>
-          <div className={`${cellBase} ${workingCls}`}>
+          <div
+            className={`${cellBase} ${workingCls} ${isDirty ? cellClickable : ""}`}
+            onClick={isDirty ? handleOpenDirty : undefined}
+            role={isDirty ? "button" : undefined}
+            tabIndex={isDirty ? 0 : undefined}
+            onKeyDown={isDirty ? (e) => e.key === "Enter" && handleOpenDirty() : undefined}
+          >
             <div className="text-xs text-muted-foreground">Working</div>
             <div className="text-sm font-semibold">
               {status ? (status.working_state === "dirty" ? "Dirty" : "Clean") : "—"}
             </div>
           </div>
-          <div className={`${cellBase} ${aheadCls}`}>
+          <div
+            className={`${cellBase} ${aheadCls} ${hasAhead ? cellClickable : ""}`}
+            onClick={hasAhead ? () => handleOpenCommits("ahead") : undefined}
+            role={hasAhead ? "button" : undefined}
+            tabIndex={hasAhead ? 0 : undefined}
+            onKeyDown={hasAhead ? (e) => e.key === "Enter" && handleOpenCommits("ahead") : undefined}
+          >
             <div className="text-xs text-muted-foreground">Ahead</div>
             <div className="text-sm font-semibold">{status ? status.ahead : "—"}</div>
           </div>
-          <div className={`${cellBase} ${behindCls}`}>
+          <div
+            className={`${cellBase} ${behindCls} ${hasBehind ? cellClickable : ""}`}
+            onClick={hasBehind ? () => handleOpenCommits("behind") : undefined}
+            role={hasBehind ? "button" : undefined}
+            tabIndex={hasBehind ? 0 : undefined}
+            onKeyDown={hasBehind ? (e) => e.key === "Enter" && handleOpenCommits("behind") : undefined}
+          >
             <div className="text-xs text-muted-foreground">Behind</div>
             <div className="text-sm font-semibold">{status ? status.behind : "—"}</div>
           </div>
@@ -344,22 +353,6 @@ function ProjectCard({
           <Button size="sm" variant="outline" onClick={handleOpenFinder} disabled={disabled}>
             Finder
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleOpenGithub}
-            disabled={disabled || ghLoading}
-          >
-            GitHub
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleOpenIssues}
-            disabled={disabled}
-          >
-            Issues
-          </Button>
         </div>
       </CardContent>
 
@@ -367,6 +360,19 @@ function ProjectCard({
         project={project}
         open={issuesDialogOpen}
         onOpenChange={setIssuesDialogOpen}
+      />
+
+      <DirtyFilesDialog
+        project={project}
+        open={dirtyDialogOpen}
+        onOpenChange={setDirtyDialogOpen}
+      />
+
+      <CommitsDialog
+        project={project}
+        mode={commitsMode}
+        open={commitsDialogOpen}
+        onOpenChange={setCommitsDialogOpen}
       />
 
       <Dialog open={removeConfirmOpen} onOpenChange={setRemoveConfirmOpen}>
