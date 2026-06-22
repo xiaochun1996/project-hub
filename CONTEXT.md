@@ -39,6 +39,15 @@ Refresh 隐含 Fetch，不需要独立的 Fetch 操作。
 ### Project Detail（项目详情页）
 点击项目卡片上的项目名称进入的独立页面。采用渐进式架构：第一版包含运行命令功能，后续可扩展 git log、dirty files diff、依赖状态等内容。通过前端路由（如 `/project/:id`）实现。
 
+### Anomalous Project（异常项目）
+项目满足以下任意条件时被视为「异常」，在主页项目列表中优先显示（按严重程度排序）：
+- Sync Status 为 Diverged（最严重）
+- Sync Status 为 Need Pull
+- Working State 为 Dirty
+- Open Issues > 0
+- Sync Status 为 Need Push（最轻微）
+处于 Synced 且 Clean 状态且无 Open Issues 的项目为「正常」，保持原有添加顺序排在列表末尾。
+
 ### Custom Command（自定义命令）
 与 Project 绑定的可执行命令，持久化存储在 Project 记录中。命令来源分两类：
 - **Auto（自动探测）** — 根据项目特征文件自动识别：

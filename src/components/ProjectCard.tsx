@@ -201,16 +201,18 @@ function ProjectCard({
 
   return (
     <Card
-      className={`overflow-hidden transition-colors hover:border-foreground/20 ${borderCls} cursor-pointer`}
-      onClick={handleNavigateToDetail}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && handleNavigateToDetail()}
+      className={`overflow-hidden transition-colors hover:border-foreground/20 ${borderCls}`}
     >
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-lg font-semibold tracking-tight">
+            <h3
+              className="truncate text-lg font-semibold tracking-tight cursor-pointer hover:text-primary transition-colors"
+              onClick={handleNavigateToDetail}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && handleNavigateToDetail()}
+            >
               {project.name}
             </h3>
             {projectOps.running && (

@@ -26,6 +26,24 @@ import { buildBatchSummary, formatInvokeError } from "@/lib/operations";
 import { ProjectStatus } from "@/lib/git";
 import { OpenIssuesResult } from "@/lib/gh";
 
+// Module-level cache — survives component unmount/re-mount across route transitions
+let cachedStatusMap: Record<string, ProjectStatus | null> = {};
+let cachedIssuesMap: Record<string, OpenIssuesResult | null> = {};
+let initialLoadDone = false;
+
+function anomalyScore(
+  status: ProjectStatus | null,
+  issues: OpenIssuesResult | null,
+): number {
+  if (!status) return 0;
+  if (status.sync_status === "diverged") return -5;
+  if (status.sync_status === "need_pull") return -4;
+  if (status.working_state === "dirty") return -3;
+  if (issues?.status === "ok" && (issues.count ?? 0) > 0) return -2;
+  if (status.sync_status === "need_push") return -1;
+  return 0;
+}
+
 function ProjectListHome() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [statusMap, setStatusMap] = useState<Record<string, ProjectStatus | null>>({});
@@ -43,12 +61,16 @@ function ProjectListHome() {
   const refreshing = ops.globalLoading.refresh;
   const pullingAll = ops.globalLoading.pull;
 
-  const loadProjects = useCallback(async () => {
-    // Prevent concurrent batch_refresh calls (React strict mode / double-mount).
-    if (batchRefreshInFlight.current) return;
-    batchRefreshInFlight.current = true;
+  const loadProjects = useCallback(async (fullRefresh?: boolean) => {
+    const shouldRefresh = fullRefresh ?? !initialLoadDone;
 
-    actions.setGlobal("refresh", true);
+    // Prevent concurrent batch_refresh calls
+    if (shouldRefresh) {
+      if (batchRefreshInFlight.current) return;
+      batchRefreshInFlight.current = true;
+      actions.setGlobal("refresh", true);
+    }
+
     try {
       const { listProjects } = await import("@/lib/projects");
       const list = await listProjects();
@@ -57,22 +79,39 @@ function ProjectListHome() {
       if (list.length === 0) {
         setStatusMap({});
         setIssuesMap({});
+        cachedStatusMap = {};
+        cachedIssuesMap = {};
         setLoaded(true);
-        actions.setGlobal("refresh", false);
         return;
       }
 
-      const batch = await batchRefresh();
-      const newStatusMap: Record<string, ProjectStatus | null> = {};
-      const newIssuesMap: Record<string, OpenIssuesResult | null> = {};
-      for (const b of batch) {
-        newStatusMap[b.id] = b.status ?? null;
-        newIssuesMap[b.id] = b.open_issues != null
-          ? { status: "ok", count: b.open_issues }
-          : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } };
+      if (shouldRefresh) {
+        const batch = await batchRefresh();
+        const newStatusMap: Record<string, ProjectStatus | null> = {};
+        const newIssuesMap: Record<string, OpenIssuesResult | null> = {};
+        for (const b of batch) {
+          newStatusMap[b.id] = b.status ?? null;
+          newIssuesMap[b.id] = b.open_issues != null
+            ? { status: "ok", count: b.open_issues }
+            : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } };
+        }
+        cachedStatusMap = newStatusMap;
+        cachedIssuesMap = newIssuesMap;
+        setStatusMap(newStatusMap);
+        setIssuesMap(newIssuesMap);
+        initialLoadDone = true;
+      } else {
+        // Use cached data, filtered to only include projects that still exist
+        const validIds = new Set(list.map((p) => p.id));
+        const filteredStatus: Record<string, ProjectStatus | null> = {};
+        const filteredIssues: Record<string, OpenIssuesResult | null> = {};
+        for (const id of validIds) {
+          if (id in cachedStatusMap) filteredStatus[id] = cachedStatusMap[id];
+          if (id in cachedIssuesMap) filteredIssues[id] = cachedIssuesMap[id];
+        }
+        setStatusMap(filteredStatus);
+        setIssuesMap(filteredIssues);
       }
-      setStatusMap(newStatusMap);
-      setIssuesMap(newIssuesMap);
     } catch (e) {
       toast({
         title: "加载项目列表失败",
@@ -81,8 +120,10 @@ function ProjectListHome() {
       });
     } finally {
       setLoaded(true);
-      actions.setGlobal("refresh", false);
-      batchRefreshInFlight.current = false;
+      if (shouldRefresh) {
+        actions.setGlobal("refresh", false);
+        batchRefreshInFlight.current = false;
+      }
     }
   }, [actions]);
 
@@ -94,12 +135,13 @@ function ProjectListHome() {
     try {
       const result = await refreshSingle(path, baseBranch);
       setStatusMap((prev) => ({ ...prev, [result.id]: result.status ?? null }));
-      setIssuesMap((prev) => ({
-        ...prev,
-        [result.id]: result.open_issues != null
-          ? { status: "ok", count: result.open_issues }
-          : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } },
-      }));
+      const issuesResult: OpenIssuesResult = result.open_issues != null
+        ? { status: "ok", count: result.open_issues }
+        : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } };
+      setIssuesMap((prev) => ({ ...prev, [result.id]: issuesResult }));
+      // Sync cache
+      cachedStatusMap[result.id] = result.status ?? null;
+      cachedIssuesMap[result.id] = issuesResult;
     } catch (e) {
       toast({
         title: "刷新失败",
@@ -122,8 +164,11 @@ function ProjectListHome() {
           : { status: "error" as const, error: { code: "CommandFailed" as const, message: "获取失败" } };
         ops.clearError(b.id);
       }
+      cachedStatusMap = newStatusMap;
+      cachedIssuesMap = newIssuesMap;
       setStatusMap(newStatusMap);
       setIssuesMap(newIssuesMap);
+      initialLoadDone = true;
       if (batch.length > 0) {
         toast({ title: "已刷新所有项目", description: `共 ${batch.length} 个` });
       }
@@ -158,7 +203,7 @@ function ProjectListHome() {
           description: `成功 ${summary.success}，跳过 ${summary.skipped}`,
         });
       }
-      await loadProjects();
+      await loadProjects(true);
     } catch (e) {
       toast({
         title: "批量 Pull 失败",
@@ -192,7 +237,7 @@ function ProjectListHome() {
           description: `成功 ${summary.success}，跳过 ${summary.skipped}`,
         });
       }
-      await loadProjects();
+      await loadProjects(true);
     } catch (e) {
       toast({
         title: "批量 Push 失败",
@@ -217,6 +262,14 @@ function ProjectListHome() {
     entries.sort((a, b) => b.ahead - a.ahead);
     return entries;
   }, [projects, statusMap]);
+
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((a, b) => {
+      const scoreA = anomalyScore(statusMap[a.id] ?? null, issuesMap[a.id] ?? null);
+      const scoreB = anomalyScore(statusMap[b.id] ?? null, issuesMap[b.id] ?? null);
+      return scoreA - scoreB;
+    });
+  }, [projects, statusMap, issuesMap]);
 
   const dirtyCount = pushPreview.filter((e) => e.dirty).length;
 
@@ -311,7 +364,7 @@ function ProjectListHome() {
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
-            {projects.map((p) => (
+            {sortedProjects.map((p) => (
               <ProjectCard
                 key={p.id}
                 project={p}
