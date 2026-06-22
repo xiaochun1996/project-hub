@@ -35,3 +35,15 @@ Project 的工作区状态：
 2. 重新计算 Sync Status、Working State、Open Issues
 
 Refresh 隐含 Fetch，不需要独立的 Fetch 操作。
+
+### Project Detail（项目详情页）
+点击项目卡片上的项目名称进入的独立页面。采用渐进式架构：第一版包含运行命令功能，后续可扩展 git log、dirty files diff、依赖状态等内容。通过前端路由（如 `/project/:id`）实现。
+
+### Custom Command（自定义命令）
+与 Project 绑定的可执行命令，持久化存储在 Project 记录中。命令来源分两类：
+- **Auto（自动探测）** — 根据项目特征文件自动识别：
+  - `package.json` → 解析 `scripts` 字段生成命令
+  - `build.gradle` / `build.gradle.kts` → 预置常用 Gradle 任务（installDebug、assembleDebug 等）
+- **Manual（手动配置）** — 用户自行添加的名称 + 命令对
+
+Auto 命令支持隐藏（`hidden: true`）而不删除。所有命令通过外置系统终端（首版 Terminal.app）执行，终端关闭则进程终止。
