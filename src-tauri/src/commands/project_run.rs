@@ -75,15 +75,20 @@ pub fn detect_project_commands(project_path: String) -> Result<Vec<CustomCommand
 /// 在 Terminal.app 中执行命令（通过 AppleScript）
 #[tauri::command]
 pub fn run_in_terminal(project_path: String, command: String) -> Result<(), String> {
-    let full_command = format!("cd '{}' && {}", project_path, command);
+    // 将 cd 和命令合并为一条 shell 命令
+    let full_command = format!("cd {} && {}", 
+        shell_escape(&project_path), 
+        command
+    );
 
     // 使用 AppleScript 在 Terminal.app 中执行命令
+    // 每次点击都会打开一个新的 Terminal 窗口
     let script = format!(
         r#"tell application "Terminal"
     do script "{}"
     activate
 end tell"#,
-        full_command.replace('"', "\\\"")
+        escape_applescript_string(&full_command)
     );
 
     use std::process::Command;
@@ -99,4 +104,18 @@ end tell"#,
     }
 
     Ok(())
+}
+
+/// 转义 shell 特殊字符
+fn shell_escape(s: &str) -> String {
+    // 用单引号包裹，并转义内部的单引号
+    format!("'{}'", s.replace("'", "'\\''"))
+}
+
+/// 转义 AppleScript 字符串中的特殊字符
+fn escape_applescript_string(s: &str) -> String {
+    s.replace("\\", "\\\\")
+     .replace("\"", "\\\"")
+     .replace("\n", "\\n")
+     .replace("\r", "\\r")
 }
